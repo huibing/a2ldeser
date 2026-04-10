@@ -1,12 +1,14 @@
-//! Integration tests using the real sample A2L file.
+//! Integration tests using the real sample A2L and HEX files.
 //!
-//! These tests require `refs/zc-blanc_rear_c-target-xcp.a2l` to be present.
+//! These tests require files in the `refs/` directory to be present.
 
 use a2lfile::*;
 use a2ldeser::compu_method::*;
+use a2ldeser::hex_reader::*;
 use a2ldeser::resolver::*;
 use a2ldeser::types::A2lValue;
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::OnceLock;
 
 /// Lazily load the A2L file once for all tests.
@@ -1039,4 +1041,87 @@ fn list_characteristics_by_type() {
     assert_eq!(r.list_characteristics(CharacteristicType::Value).len(), 9374);
     assert_eq!(r.list_characteristics(CharacteristicType::ValBlk).len(), 673);
     assert_eq!(r.list_characteristics(CharacteristicType::Ascii).len(), 5);
+}
+
+// ========================================================================
+// HEX File Integration Tests
+// ========================================================================
+
+fn sample_hex() -> &'static HexMemory {
+    static HEX: OnceLock<HexMemory> = OnceLock::new();
+    HEX.get_or_init(|| {
+        HexMemory::from_file(Path::new("refs/zc-blanc_rear_c_tc389-inca.hex"))
+            .expect("could not load sample HEX file")
+    })
+}
+
+#[test]
+fn hex_loads_without_panic() {
+    let _hex = sample_hex();
+}
+
+#[test]
+fn hex_has_segments() {
+    let hex = sample_hex();
+    assert!(hex.segment_count() > 0, "HEX should have at least one segment");
+    assert!(hex.total_bytes() > 0, "HEX should have data");
+}
+
+#[test]
+fn hex_address_range_is_reasonable() {
+    let hex = sample_hex();
+    let min = hex.min_address().unwrap();
+    let max = hex.max_address().unwrap();
+    // Automotive ECU flash typically starts at 0x80000000+ (TriCore)
+    assert!(min >= 0x8000_0000, "min address 0x{min:08X} should be in flash region");
+    assert!(max > min, "max should exceed min");
+}
+
+#[test]
+fn hex_characteristic_addresses_are_readable() {
+    let hex = sample_hex();
+    let m = module();
+    // Sample some Value characteristics and verify their addresses are in the HEX
+    let readable_count = m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Value)
+        .take(100)
+        .filter(|c| hex.contains(c.address, 1))
+        .count();
+    assert!(readable_count > 0,
+        "at least some characteristic addresses should be in the HEX file");
+}
+
+#[test]
+fn hex_read_scalar_value_bytes() {
+    let hex = sample_hex();
+    let m = module();
+    // Find a Value characteristic with a known scalar layout
+    let ch = m.characteristic.iter()
+        .find(|c| c.get_name() == "g_xcp_enable_status")
+        .unwrap();
+    // This has Scalar_ULONG layout — try reading 4 bytes at its address
+    if hex.contains(ch.address, 4) {
+        let bytes = hex.read_bytes(ch.address, 4).unwrap();
+        assert_eq!(bytes.len(), 4);
+    }
+}
+
+#[test]
+fn hex_axis_pts_addresses_are_readable() {
+    let hex = sample_hex();
+    let m = module();
+    let readable = m.axis_pts.iter()
+        .filter(|ap| hex.contains(ap.address, 1))
+        .count();
+    // At least some axis_pts should be in the HEX file
+    assert!(readable > 0, "some AXIS_PTS addresses should be in the HEX file");
+}
+
+#[test]
+fn hex_total_size_is_reasonable() {
+    let hex = sample_hex();
+    let total = hex.total_bytes();
+    // A typical ECU flash image is a few MB
+    assert!(total > 100_000, "HEX should have >100KB of data, got {total}");
+    assert!(total < 100_000_000, "HEX should have <100MB of data, got {total}");
 }

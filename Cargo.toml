@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 a2lfile = "3.3.2"
+ihex = "3.0.0"
