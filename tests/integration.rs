@@ -4,6 +4,7 @@
 
 use a2lfile::*;
 use a2ldeser::compu_method::*;
+use a2ldeser::extractor::*;
 use a2ldeser::hex_reader::*;
 use a2ldeser::resolver::*;
 use a2ldeser::types::A2lValue;
@@ -1223,8 +1224,6 @@ fn measurement_conversion_refs_mostly_valid() {
 // End-to-End Extractor Tests
 // ========================================================================
 
-use a2ldeser::extractor::*;
-
 fn extractor() -> &'static Extractor<'static> {
     static EXT: OnceLock<Extractor<'static>> = OnceLock::new();
     EXT.get_or_init(|| Extractor::new(module(), sample_hex()))
@@ -1649,4 +1648,119 @@ fn extract_ascii_wrong_type_fails() {
     let result = ext.extract_ascii(&value_name);
     assert!(matches!(result, Err(ExtractError::Resolve(ResolveError::WrongType { .. }))),
         "extracting Value as Ascii should fail");
+}
+
+// ========================================================================
+// Batch Extraction and Error Recovery Tests
+// ========================================================================
+
+#[test]
+fn extract_all_returns_report_with_successes() {
+    let ext = extractor();
+    let report = ext.extract_all();
+    assert!(report.successes.len() > 1000, "should extract many characteristics");
+    assert_eq!(report.total(), report.successes.len() + report.failures.len());
+}
+
+#[test]
+fn extract_all_zero_failures_with_full_hex() {
+    let ext = extractor();
+    let report = ext.extract_all();
+    assert_eq!(report.failures.len(), 0,
+        "all characteristics should extract; got {} failures: {:?}",
+        report.failures.len(),
+        report.failures.iter().take(5).map(|f| &f.name).collect::<Vec<_>>());
+}
+
+#[test]
+fn extract_all_success_counts_match_a2l() {
+    let m = module();
+    let ext = extractor();
+    let report = ext.extract_all();
+    let counts = report.success_counts();
+
+    let a2l_values = m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Value).count();
+    let a2l_curves = m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Curve).count();
+    let a2l_maps = m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Map).count();
+
+    assert_eq!(*counts.get("VALUE").unwrap_or(&0), a2l_values);
+    assert_eq!(*counts.get("CURVE").unwrap_or(&0), a2l_curves);
+    assert_eq!(*counts.get("MAP").unwrap_or(&0), a2l_maps);
+}
+
+#[test]
+fn extract_any_auto_detects_value() {
+    let ext = extractor();
+    let m = module();
+    let name = m.characteristic.iter()
+        .find(|c| c.characteristic_type == CharacteristicType::Value
+            && sample_hex().contains(c.address, 1))
+        .map(|c| c.get_name())
+        .expect("need a Value characteristic in HEX");
+
+    let obj = ext.extract_any(name).expect("extract_any should succeed");
+    assert!(matches!(obj, ExtractedObject::Value(_)));
+    assert_eq!(obj.type_label(), "VALUE");
+}
+
+#[test]
+fn extract_any_auto_detects_curve() {
+    let ext = extractor();
+    let m = module();
+    let name = m.characteristic.iter()
+        .find(|c| c.characteristic_type == CharacteristicType::Curve
+            && sample_hex().contains(c.address, 1))
+        .map(|c| c.get_name())
+        .expect("need a Curve characteristic in HEX");
+
+    let obj = ext.extract_any(name).expect("extract_any should succeed");
+    assert!(matches!(obj, ExtractedObject::Curve(_)));
+    assert_eq!(obj.type_label(), "CURVE");
+}
+
+#[test]
+fn extract_any_auto_detects_map() {
+    let ext = extractor();
+    let m = module();
+    let name = m.characteristic.iter()
+        .find(|c| c.characteristic_type == CharacteristicType::Map
+            && sample_hex().contains(c.address, 1))
+        .map(|c| c.get_name())
+        .expect("need a Map characteristic in HEX");
+
+    let obj = ext.extract_any(name).expect("extract_any should succeed");
+    assert!(matches!(obj, ExtractedObject::Map(_)));
+    assert_eq!(obj.type_label(), "MAP");
+}
+
+#[test]
+fn extract_any_auto_detects_ascii() {
+    let ext = extractor();
+    let m = module();
+    let name = m.characteristic.iter()
+        .find(|c| c.characteristic_type == CharacteristicType::Ascii
+            && sample_hex().contains(c.address, 1))
+        .map(|c| c.get_name())
+        .expect("need an Ascii characteristic in HEX");
+
+    let obj = ext.extract_any(name).expect("extract_any should succeed");
+    assert!(matches!(obj, ExtractedObject::Ascii(_)));
+    assert_eq!(obj.type_label(), "ASCII");
+}
+
+#[test]
+fn extract_any_not_found() {
+    let ext = extractor();
+    let result = ext.extract_any("nonexistent_object_xyz");
+    assert!(result.is_err());
+}
+
+#[test]
+fn extraction_report_print_summary_does_not_panic() {
+    let ext = extractor();
+    let report = ext.extract_all();
+    report.print_summary();
 }

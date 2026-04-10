@@ -603,6 +603,193 @@ impl<'a> Extractor<'a> {
 }
 
 // ========================================================================
+// Batch extraction with error recovery
+// ========================================================================
+
+/// Result of extracting a single characteristic (any type).
+#[derive(Debug, Clone)]
+pub enum ExtractedObject {
+    Value(ExtractedValue),
+    Curve(ExtractedCurve),
+    Map(ExtractedMap),
+    ValBlk(ExtractedValBlk),
+    Ascii(ExtractedAscii),
+}
+
+impl ExtractedObject {
+    /// Get the object name.
+    pub fn name(&self) -> &str {
+        match self {
+            ExtractedObject::Value(v) => &v.name,
+            ExtractedObject::Curve(c) => &c.name,
+            ExtractedObject::Map(m) => &m.name,
+            ExtractedObject::ValBlk(b) => &b.name,
+            ExtractedObject::Ascii(a) => &a.name,
+        }
+    }
+
+    /// Get a short type label.
+    pub fn type_label(&self) -> &'static str {
+        match self {
+            ExtractedObject::Value(_) => "VALUE",
+            ExtractedObject::Curve(_) => "CURVE",
+            ExtractedObject::Map(_) => "MAP",
+            ExtractedObject::ValBlk(_) => "VAL_BLK",
+            ExtractedObject::Ascii(_) => "ASCII",
+        }
+    }
+}
+
+/// A single extraction failure.
+#[derive(Debug)]
+pub struct ExtractionFailure {
+    pub name: String,
+    pub type_label: String,
+    pub error: ExtractError,
+}
+
+/// Summary report from a batch extraction run.
+#[derive(Debug)]
+pub struct ExtractionReport {
+    pub successes: Vec<ExtractedObject>,
+    pub failures: Vec<ExtractionFailure>,
+}
+
+impl ExtractionReport {
+    /// Total number of objects attempted.
+    pub fn total(&self) -> usize {
+        self.successes.len() + self.failures.len()
+    }
+
+    /// Count successes by type.
+    pub fn success_counts(&self) -> std::collections::HashMap<&'static str, usize> {
+        let mut counts = std::collections::HashMap::new();
+        for obj in &self.successes {
+            *counts.entry(obj.type_label()).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// Count failures by type.
+    pub fn failure_counts(&self) -> std::collections::HashMap<String, usize> {
+        let mut counts = std::collections::HashMap::new();
+        for f in &self.failures {
+            *counts.entry(f.type_label.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// Print a human-readable summary to stdout.
+    pub fn print_summary(&self) {
+        let ok = self.successes.len();
+        let fail = self.failures.len();
+        println!("Extraction complete: {ok} succeeded, {fail} failed out of {} total", self.total());
+
+        if ok > 0 {
+            println!("\nSuccesses by type:");
+            let counts = self.success_counts();
+            for label in &["VALUE", "CURVE", "MAP", "VAL_BLK", "ASCII"] {
+                if let Some(&n) = counts.get(label) {
+                    println!("  {label}: {n}");
+                }
+            }
+        }
+
+        if fail > 0 {
+            println!("\nFailures by type:");
+            let counts = self.failure_counts();
+            let mut sorted: Vec<_> = counts.into_iter().collect();
+            sorted.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+            for (label, n) in &sorted {
+                println!("  {label}: {n}");
+            }
+
+            println!("\nFirst {} errors:", fail.min(10));
+            for f in self.failures.iter().take(10) {
+                println!("  {} ({}): {}", f.name, f.type_label, f.error);
+            }
+            if fail > 10 {
+                println!("  ... and {} more", fail - 10);
+            }
+        }
+    }
+}
+
+impl<'a> Extractor<'a> {
+    /// Extract all characteristics in the module, recovering from per-object errors.
+    ///
+    /// Objects whose addresses are not present in the HEX data (e.g., outside the
+    /// flash region) are recorded as failures rather than aborting the entire run.
+    pub fn extract_all(&self) -> ExtractionReport {
+        use a2lfile::{A2lObjectName, CharacteristicType};
+
+        let mut successes = Vec::new();
+        let mut failures = Vec::new();
+
+        for ch in self.module.characteristic.iter() {
+            let name = ch.get_name().to_string();
+            let type_label = format!("{:?}", ch.characteristic_type);
+
+            let result = match ch.characteristic_type {
+                CharacteristicType::Value => self
+                    .extract_value(&name)
+                    .map(ExtractedObject::Value),
+                CharacteristicType::Curve => self
+                    .extract_curve(&name)
+                    .map(ExtractedObject::Curve),
+                CharacteristicType::Map => self
+                    .extract_map(&name)
+                    .map(ExtractedObject::Map),
+                CharacteristicType::ValBlk => self
+                    .extract_val_blk(&name)
+                    .map(ExtractedObject::ValBlk),
+                CharacteristicType::Ascii => self
+                    .extract_ascii(&name)
+                    .map(ExtractedObject::Ascii),
+                // Cuboid, Cube4, Cube5 are extremely rare; skip them
+                _ => continue,
+            };
+
+            match result {
+                Ok(obj) => successes.push(obj),
+                Err(e) => failures.push(ExtractionFailure {
+                    name,
+                    type_label,
+                    error: e,
+                }),
+            }
+        }
+
+        ExtractionReport {
+            successes,
+            failures,
+        }
+    }
+
+    /// Extract a single characteristic by name, auto-detecting its type.
+    pub fn extract_any(&self, name: &str) -> Result<ExtractedObject, ExtractError> {
+        let resolved = self.resolver.resolve_characteristic(name)?;
+        match resolved {
+            ResolvedCharacteristic::Value(_) => {
+                self.extract_value(name).map(ExtractedObject::Value)
+            }
+            ResolvedCharacteristic::Curve(_) => {
+                self.extract_curve(name).map(ExtractedObject::Curve)
+            }
+            ResolvedCharacteristic::Map(_) => {
+                self.extract_map(name).map(ExtractedObject::Map)
+            }
+            ResolvedCharacteristic::ValBlk(_) => {
+                self.extract_val_blk(name).map(ExtractedObject::ValBlk)
+            }
+            ResolvedCharacteristic::Ascii(_) => {
+                self.extract_ascii(name).map(ExtractedObject::Ascii)
+            }
+        }
+    }
+}
+
+// ========================================================================
 // Tests
 // ========================================================================
 
