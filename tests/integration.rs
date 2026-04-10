@@ -5,6 +5,7 @@
 use a2lfile::*;
 use a2ldeser::compu_method::*;
 use a2ldeser::types::A2lValue;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 /// Lazily load the A2L file once for all tests.
@@ -672,4 +673,224 @@ fn lookup2d_record_layout_structure() {
     assert_eq!(fnc.datatype, DataType::Float32Ieee);
     // Verify ColumnDir index mode (row-major storage)
     assert_eq!(fnc.index_mode, IndexMode::ColumnDir);
+}
+
+// ========================================================================
+// Cross-Reference Integrity Tests
+// ========================================================================
+
+fn compu_method_names(m: &Module) -> HashSet<String> {
+    m.compu_method.iter().map(|c| c.get_name().to_string()).collect()
+}
+
+fn record_layout_names(m: &Module) -> HashSet<String> {
+    m.record_layout.iter().map(|r| r.get_name().to_string()).collect()
+}
+
+fn axis_pts_names(m: &Module) -> HashSet<String> {
+    m.axis_pts.iter().map(|a| a.get_name().to_string()).collect()
+}
+
+fn vtab_names(m: &Module) -> HashSet<String> {
+    m.compu_vtab.iter().map(|v| v.get_name().to_string())
+        .chain(m.compu_vtab_range.iter().map(|v| v.get_name().to_string()))
+        .collect()
+}
+
+// -- Characteristic cross-references --
+
+#[test]
+fn all_characteristics_reference_valid_compu_methods() {
+    let m = module();
+    let cm = compu_method_names(m);
+    let broken: Vec<_> = m.characteristic.iter()
+        .filter(|ch| ch.conversion != "NO_COMPU_METHOD")
+        .filter(|ch| !cm.contains(&ch.conversion))
+        .map(|ch| format!("{} -> {}", ch.get_name(), ch.conversion))
+        .collect();
+    assert!(broken.is_empty(), "broken characteristic->CM refs: {:?}", broken);
+}
+
+#[test]
+fn all_characteristics_reference_valid_record_layouts() {
+    let m = module();
+    let rl = record_layout_names(m);
+    let broken: Vec<_> = m.characteristic.iter()
+        .filter(|ch| !rl.contains(&ch.deposit))
+        .map(|ch| format!("{} -> {}", ch.get_name(), ch.deposit))
+        .collect();
+    assert!(broken.is_empty(), "broken characteristic->RL refs: {:?}", broken);
+}
+
+#[test]
+fn characteristic_no_compu_method_count() {
+    let m = module();
+    let count = m.characteristic.iter()
+        .filter(|ch| ch.conversion == "NO_COMPU_METHOD")
+        .count();
+    assert_eq!(count, 35, "expected 35 characteristics with NO_COMPU_METHOD");
+}
+
+// -- Measurement cross-references --
+
+#[test]
+fn measurement_compu_method_integrity() {
+    let m = module();
+    let cm = compu_method_names(m);
+    let broken: Vec<_> = m.measurement.iter()
+        .filter(|meas| meas.conversion != "NO_COMPU_METHOD")
+        .filter(|meas| !cm.contains(&meas.conversion))
+        .map(|meas| meas.get_name().to_string())
+        .collect();
+    // 5 measurements reference DMC_CM_uint32 which doesn't exist in this module
+    assert_eq!(broken.len(), 5, "expected exactly 5 broken measurement->CM refs");
+    assert!(broken.iter().all(|n| n.contains("_LowCnt")),
+        "all broken refs should be *_LowCnt measurements, got: {:?}", broken);
+}
+
+#[test]
+fn measurement_no_compu_method_count() {
+    let m = module();
+    let count = m.measurement.iter()
+        .filter(|meas| meas.conversion == "NO_COMPU_METHOD")
+        .count();
+    assert_eq!(count, 471, "expected 471 measurements with NO_COMPU_METHOD");
+}
+
+// -- AxisDescr cross-references --
+
+#[test]
+fn all_axis_descr_reference_valid_compu_methods() {
+    let m = module();
+    let cm = compu_method_names(m);
+    let mut broken = Vec::new();
+    for ch in &m.characteristic {
+        for ad in &ch.axis_descr {
+            if ad.conversion != "NO_COMPU_METHOD" && !cm.contains(&ad.conversion) {
+                broken.push(format!("{} axis -> {}", ch.get_name(), ad.conversion));
+            }
+        }
+    }
+    assert!(broken.is_empty(), "broken axis_descr->CM refs: {:?}", broken);
+}
+
+#[test]
+fn all_axis_descr_axis_pts_refs_resolve() {
+    let m = module();
+    let ap = axis_pts_names(m);
+    let mut broken = Vec::new();
+    for ch in &m.characteristic {
+        for ad in &ch.axis_descr {
+            if let Some(ref apr) = ad.axis_pts_ref {
+                if !ap.contains(&apr.axis_points) {
+                    broken.push(format!("{} -> {}", ch.get_name(), apr.axis_points));
+                }
+            }
+        }
+    }
+    assert!(broken.is_empty(), "broken axis_descr->axis_pts refs: {:?}", broken);
+}
+
+#[test]
+fn axis_pts_ref_total_count() {
+    let m = module();
+    let count: usize = m.characteristic.iter()
+        .flat_map(|ch| &ch.axis_descr)
+        .filter(|ad| ad.axis_pts_ref.is_some())
+        .count();
+    assert_eq!(count, 999, "expected 999 axis_pts_ref entries (311 curve + 688 map)");
+}
+
+// -- CompuMethod -> CompuVtab cross-references --
+
+#[test]
+fn all_compu_tab_refs_resolve_to_vtab() {
+    let m = module();
+    let vtabs = vtab_names(m);
+    let broken: Vec<_> = m.compu_method.iter()
+        .filter_map(|cm| cm.compu_tab_ref.as_ref().map(|r| (cm, r)))
+        .filter(|(_, r)| !vtabs.contains(&r.conversion_table))
+        .map(|(cm, r)| format!("{} -> {}", cm.get_name(), r.conversion_table))
+        .collect();
+    assert!(broken.is_empty(), "broken CM->vtab refs: {:?}", broken);
+}
+
+#[test]
+fn compu_tab_ref_count_matches_tab_verb_count() {
+    let m = module();
+    let tab_verb_count = m.compu_method.iter()
+        .filter(|cm| cm.conversion_type == ConversionType::TabVerb)
+        .count();
+    let tab_ref_count = m.compu_method.iter()
+        .filter(|cm| cm.compu_tab_ref.is_some())
+        .count();
+    assert_eq!(tab_verb_count, 432);
+    assert_eq!(tab_ref_count, tab_verb_count,
+        "every TabVerb should have a compu_tab_ref");
+}
+
+// -- AxisPts cross-references --
+
+#[test]
+fn all_axis_pts_reference_valid_compu_methods() {
+    let m = module();
+    let cm = compu_method_names(m);
+    let broken: Vec<_> = m.axis_pts.iter()
+        .filter(|ap| ap.conversion != "NO_COMPU_METHOD")
+        .filter(|ap| !cm.contains(&ap.conversion))
+        .map(|ap| format!("{} -> {}", ap.get_name(), ap.conversion))
+        .collect();
+    assert!(broken.is_empty(), "broken axis_pts->CM refs: {:?}", broken);
+}
+
+// -- Conversion type distribution --
+
+#[test]
+fn compu_method_type_distribution() {
+    let m = module();
+    let identical = m.compu_method.iter().filter(|cm| cm.conversion_type == ConversionType::Identical).count();
+    let linear = m.compu_method.iter().filter(|cm| cm.conversion_type == ConversionType::Linear).count();
+    let rat_func = m.compu_method.iter().filter(|cm| cm.conversion_type == ConversionType::RatFunc).count();
+    let tab_verb = m.compu_method.iter().filter(|cm| cm.conversion_type == ConversionType::TabVerb).count();
+    assert_eq!(identical, 1);
+    assert_eq!(linear, 1);
+    assert_eq!(rat_func, 561);
+    assert_eq!(tab_verb, 432);
+    assert_eq!(identical + linear + rat_func + tab_verb, m.compu_method.len(),
+        "all compu_methods should be accounted for");
+}
+
+// -- Bidirectional: every CompuVtab is referenced by at least one CompuMethod --
+
+#[test]
+fn all_compu_vtabs_are_referenced() {
+    let m = module();
+    let referenced: HashSet<String> = m.compu_method.iter()
+        .filter_map(|cm| cm.compu_tab_ref.as_ref())
+        .map(|r| r.conversion_table.clone())
+        .collect();
+    let unreferenced: Vec<_> = m.compu_vtab.iter()
+        .filter(|v| !referenced.contains(v.get_name()))
+        .map(|v| v.get_name().to_string())
+        .collect();
+    assert!(unreferenced.is_empty(),
+        "unreferenced compu_vtabs: {:?}", unreferenced);
+}
+
+// -- Bidirectional: every AxisPts is referenced by at least one axis_descr --
+
+#[test]
+fn all_axis_pts_are_referenced() {
+    let m = module();
+    let referenced: HashSet<String> = m.characteristic.iter()
+        .flat_map(|ch| &ch.axis_descr)
+        .filter_map(|ad| ad.axis_pts_ref.as_ref())
+        .map(|r| r.axis_points.clone())
+        .collect();
+    let unreferenced: Vec<_> = m.axis_pts.iter()
+        .filter(|ap| !referenced.contains(ap.get_name()))
+        .map(|ap| ap.get_name().to_string())
+        .collect();
+    assert!(unreferenced.is_empty(),
+        "unreferenced axis_pts: {:?}", unreferenced);
 }
