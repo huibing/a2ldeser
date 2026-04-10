@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -61,6 +62,16 @@ enum Command {
         /// Path to the Intel HEX file
         hex: PathBuf,
     },
+    /// Export all extracted values to a file (JSON or CSV, auto-detected from extension)
+    Export {
+        /// Path to the A2L file
+        a2l: PathBuf,
+        /// Path to the Intel HEX file
+        hex: PathBuf,
+        /// Output file path (.json or .csv)
+        #[arg(short, long)]
+        output: PathBuf,
+    },
 }
 
 fn main() {
@@ -72,6 +83,7 @@ fn main() {
         Command::Decode { a2l, name, raw } => cmd_decode(&a2l, &name, &raw, fmt),
         Command::List { a2l } => cmd_list(&a2l, fmt),
         Command::Summary { a2l, hex } => cmd_summary(&a2l, &hex, fmt),
+        Command::Export { a2l, hex, output } => cmd_export(&a2l, &hex, &output),
     }
 }
 
@@ -349,6 +361,125 @@ fn cmd_summary(a2l_path: &Path, hex_path: &Path, fmt: Format) {
                 "failures": failures,
             })).unwrap());
         }
+    }
+}
+
+// ========================================================================
+// export subcommand
+// ========================================================================
+
+#[derive(Clone, Copy, PartialEq)]
+enum ExportFormat {
+    Json,
+    Csv,
+}
+
+fn cmd_export(a2l_path: &Path, hex_path: &Path, output: &Path) {
+    let ext_fmt = match output.extension().and_then(|e| e.to_str()) {
+        Some("json") => ExportFormat::Json,
+        Some("csv") => ExportFormat::Csv,
+        Some(other) => {
+            eprintln!("Error: unsupported file extension '.{other}', use .json or .csv");
+            process::exit(1);
+        }
+        None => {
+            eprintln!("Error: output file must have .json or .csv extension");
+            process::exit(1);
+        }
+    };
+
+    let a2l = load_a2l(a2l_path);
+    let module = &a2l.project.module[0];
+
+    let hex = HexMemory::from_file(hex_path).unwrap_or_else(|e| {
+        eprintln!("Error loading HEX file: {e}");
+        process::exit(1);
+    });
+
+    let ext = Extractor::new(module, &hex);
+    let report = ext.extract_all();
+
+    let mut file = std::fs::File::create(output).unwrap_or_else(|e| {
+        eprintln!("Error creating output file: {e}");
+        process::exit(1);
+    });
+
+    match ext_fmt {
+        ExportFormat::Json => {
+            serde_json::to_writer_pretty(&mut file, &report.successes).unwrap_or_else(|e| {
+                eprintln!("Error writing JSON: {e}");
+                process::exit(1);
+            });
+            writeln!(file).ok();
+        }
+        ExportFormat::Csv => {
+            write_csv(&mut file, &report.successes).unwrap_or_else(|e| {
+                eprintln!("Error writing CSV: {e}");
+                process::exit(1);
+            });
+        }
+    }
+
+    eprintln!(
+        "Exported {} objects to {} ({} failures skipped)",
+        report.successes.len(),
+        output.display(),
+        report.failures.len()
+    );
+}
+
+/// Write extracted objects as a flat CSV.
+///
+/// Columns: name, type, x, y, value, unit
+/// - VALUE:  one row per scalar
+/// - CURVE:  one row per breakpoint (x = breakpoint, value = function value)
+/// - MAP:    one row per cell (x = x-axis, y = y-axis, value = cell)
+/// - VAL_BLK: one row per element (x = index)
+/// - ASCII:  one row (value = text)
+fn write_csv(w: &mut impl Write, objects: &[ExtractedObject]) -> std::io::Result<()> {
+    writeln!(w, "name,type,x,y,value,unit")?;
+    for obj in objects {
+        match obj {
+            ExtractedObject::Value(val) => {
+                writeln!(w, "{},VALUE,,,{},{}", csv_escape(&val.name), csv_phys(&val.physical), csv_escape(&val.unit))?;
+            }
+            ExtractedObject::Curve(curve) => {
+                for (i, pv) in curve.values.iter().enumerate() {
+                    writeln!(w, "{},CURVE,{},,{},{}", csv_escape(&curve.name), curve.x_axis[i], csv_phys(pv), csv_escape(&curve.unit))?;
+                }
+            }
+            ExtractedObject::Map(map) => {
+                for (yi, row) in map.values.iter().enumerate() {
+                    for (xi, pv) in row.iter().enumerate() {
+                        writeln!(w, "{},MAP,{},{},{},{}", csv_escape(&map.name), map.x_axis[xi], map.y_axis[yi], csv_phys(pv), csv_escape(&map.unit))?;
+                    }
+                }
+            }
+            ExtractedObject::ValBlk(vb) => {
+                for (i, pv) in vb.values.iter().enumerate() {
+                    writeln!(w, "{},VAL_BLK,{},,{},{}", csv_escape(&vb.name), i, csv_phys(pv), csv_escape(&vb.unit))?;
+                }
+            }
+            ExtractedObject::Ascii(ascii) => {
+                writeln!(w, "{},ASCII,,,{},", csv_escape(&ascii.name), csv_escape(&ascii.text))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn csv_escape(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn csv_phys(v: &PhysicalValue) -> String {
+    match v {
+        PhysicalValue::Numeric(n) => format!("{n}"),
+        PhysicalValue::Verbal(s) => csv_escape(s),
     }
 }
 
