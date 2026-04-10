@@ -1,0 +1,7 @@
+[package]
+name = "a2ldeser"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+a2lfile = "3.3.2"
