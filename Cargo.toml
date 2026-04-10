@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 a2lfile = "3.3.2"
+clap = { version = "4", features = ["derive"] }
 ihex = "3.0.0"
