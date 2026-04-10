@@ -46,6 +46,20 @@ let (a2l, logmsgs) = a2lfile::load(&input_path, None, false)
 - `FixAxisParList` field: `axis_pts_value_list: Vec<f64>`
 - Lookup RecordLayouts (e.g., `Lookup1D_FLOAT32_IEEE`) typically only define `fnc_values`; axis geometry comes from `axis_descr`, not from the layout's `axis_pts_x/y` fields
 
+## Key Dependency: `ihex` Crate
+
+The `ihex` crate (v3.0.0) handles low-level Intel HEX record parsing. We wrap it
+in `HexMemory` (`src/hex_reader.rs`) which builds a contiguous memory image.
+
+```rust
+use a2ldeser::hex_reader::HexMemory;
+
+let hex = HexMemory::from_file(Path::new("my.hex"))?;
+let val = hex.read_u32_le(0x80040100)?;
+```
+
+Do not use `ihex` directly — always go through `HexMemory`.
+
 ## A2L Format Quick Reference
 
 A2L files use `/begin KEYWORD` … `/end KEYWORD` block syntax. The hierarchy is:
@@ -77,6 +91,7 @@ Files in `refs/` are large reference artifacts — do not modify or parse at bui
 | `src/types.rs` | `A2lValue` enum — all A2L data types with `from_bytes()`, `as_f64()` |
 | `src/compu_method.rs` | COMPU_METHOD conversions (IDENTICAL, LINEAR, RAT_FUNC, TAB_*, TAB_VERB) |
 | `src/resolver.rs` | Cross-reference resolver: Characteristic → axes → layout → units |
+| `src/hex_reader.rs` | Intel HEX file reader: `HexMemory` memory image with address-based access |
 | `src/lib.rs` | Library root re-exporting all modules |
 | `tests/integration.rs` | Integration tests against the real sample A2L file |
 
@@ -120,6 +135,51 @@ let maps = resolver.resolve_all_maps();      // Vec<Result<ResolvedMap, _>>
 - `Resolver::compute_fix_axis_par_values(offset, shift, count)` → `Vec<f64>`
 - `Resolver::list_characteristics(CharacteristicType)` → filtered list
 - `ResolvedLayout.fnc_values_datatype` → the data type for reading binary values
+
+### HexMemory — Intel HEX Reader (`src/hex_reader.rs`)
+
+`HexMemory` loads an Intel HEX file into a flat, address-indexed memory image
+using `BTreeMap<u32, Vec<u8>>` segments. Contiguous records are automatically
+merged into single segments.
+
+```rust
+use a2ldeser::hex_reader::HexMemory;
+use std::path::Path;
+
+// Load from file
+let hex = HexMemory::from_file(Path::new("refs/my_flash.hex"))?;
+
+// Address queries
+hex.contains(0x80040000, 4);      // true if 4 bytes are readable at addr
+hex.min_address();                 // Some(0x80040000)
+hex.max_address();                 // Some(0x801FFFFF)
+
+// Typed reads (little-endian)
+let raw_u8  = hex.read_u8(addr)?;
+let raw_u16 = hex.read_u16_le(addr)?;
+let raw_u32 = hex.read_u32_le(addr)?;
+let raw_f32 = hex.read_f32_le(addr)?;
+let bytes   = hex.read_bytes(addr, len)?;
+
+// Segment introspection
+hex.segment_count();              // number of contiguous regions
+hex.total_bytes();                // total data bytes across all segments
+for (base, data) in hex.segments() { ... }
+```
+
+**Supported HEX formats:**
+- I32HEX (Extended Linear Address, record type 04) — common for 32-bit automotive ECUs
+- I16HEX (Extended Segment Address, record type 02)
+- Standard Data records (type 00), EOF (type 01)
+
+**Integration with other modules:**
+```rust
+// Read a characteristic's raw value from the HEX file
+let ch = module.characteristic.iter().find(|c| c.get_name() == "MyParam").unwrap();
+let bytes = hex.read_bytes(ch.address, 4)?;
+let raw_val = A2lValue::from_bytes(&bytes, DataType::Float32Ieee)?;
+let phys_val = convert_raw_to_physical(raw_val.as_f64()?, &a2l_file, &compu_method_name)?;
+```
 
 ## Critical Design Areas
 
