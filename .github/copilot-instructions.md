@@ -18,7 +18,8 @@ cargo fmt --check        # check formatting
 
 ## CLI Usage
 
-Three subcommands: `extract`, `decode`, `list`, and `summary`.
+Four subcommands: `extract`, `decode`, `list`, and `summary`.
+All support `--format json` for structured output.
 
 ```sh
 # Extract a characteristic from a HEX file
@@ -32,6 +33,10 @@ a2ldeser list <A2L>
 
 # Batch-extract all characteristics and report success/failure summary
 a2ldeser summary <A2L> <HEX>
+
+# JSON output (any subcommand)
+a2ldeser --format json extract my.a2l my.hex MyParam
+a2ldeser --format json summary my.a2l my.hex
 ```
 
 ### Extract examples (from HEX file)

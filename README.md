@@ -10,7 +10,7 @@ A Rust library and CLI tool for deserializing [ASAP2 (A2L)](https://www.asam.net
 - **All characteristic types** — VALUE (scalar), CURVE (1D lookup), MAP (2D lookup), VAL_BLK (array), ASCII (string)
 - **Measurement support** — resolves measurement metadata with RAM address guard
 - **Raw byte decoding** — decode hex bytes from XCP/CCP traces or memory dumps
-- **CLI tool** — extract values from HEX files or decode raw bytes from the command line
+- **CLI tool** — extract values from HEX files or decode raw bytes, with `--format json` support
 
 ## Installation
 
@@ -27,6 +27,8 @@ a2ldeser = { path = "path/to/a2ldeser" }
 
 ## CLI Usage
 
+All subcommands support `--format json` for structured JSON output (default: `text`).
+
 ### Extract characteristic from HEX file
 
 ```sh
@@ -35,6 +37,10 @@ a2ldeser extract <A2L_FILE> <HEX_FILE> <NAME>
 # Scalar value
 a2ldeser extract my.a2l my.hex g_xcp_enable_status
 # → g_xcp_enable_status: 1  (raw: U32(1))
+
+# JSON output
+a2ldeser --format json extract my.a2l my.hex g_xcp_enable_status
+# → { "Value": { "name": "g_xcp_enable_status", ... } }
 
 # 1D curve
 a2ldeser extract my.a2l my.hex MyCurve
@@ -175,6 +181,8 @@ cargo run --example list_objects -- my.a2l
 - [`a2lfile`](https://crates.io/crates/a2lfile) v3.3.2 — A2L file parser
 - [`ihex`](https://crates.io/crates/ihex) v3.0.0 — Intel HEX parser
 - [`clap`](https://crates.io/crates/clap) v4 — CLI argument parsing
+- [`serde`](https://crates.io/crates/serde) v1 — Serialization framework
+- [`serde_json`](https://crates.io/crates/serde_json) v1 — JSON output
 
 ## License
 
