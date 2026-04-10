@@ -263,6 +263,56 @@ pub fn convert_raw_to_physical(
     }
 }
 
+/// Convert a raw value to its string (verbal) representation.
+///
+/// Returns `Some(label)` for TAB_VERB conversions, `None` for numeric conversions.
+/// Use this when you need the verbal label (e.g., "ON"/"OFF" for boolean states).
+pub fn convert_raw_to_string(
+    raw: &A2lValue,
+    compu_method_name: &str,
+    module: &Module,
+) -> Result<Option<String>, ConversionError> {
+    let raw_f64 = raw.as_f64().ok_or(ConversionError::InvalidInput)?;
+
+    if compu_method_name == "NO_COMPU_METHOD" {
+        return Ok(None);
+    }
+
+    use a2lfile::A2lObjectName;
+    let cm = module
+        .compu_method
+        .iter()
+        .find(|cm| cm.get_name() == compu_method_name)
+        .ok_or_else(|| ConversionError::MethodNotFound(compu_method_name.to_string()))?;
+
+    match cm.conversion_type {
+        ConversionType::TabVerb => {
+            let tab_ref = cm
+                .compu_tab_ref
+                .as_ref()
+                .ok_or(ConversionError::InvalidInput)?;
+            if let Some(vtab) = module
+                .compu_vtab
+                .iter()
+                .find(|v| v.get_name() == tab_ref.conversion_table)
+            {
+                Ok(Some(convert_tab_verb(raw_f64, vtab)?))
+            } else if let Some(vtab_range) = module
+                .compu_vtab_range
+                .iter()
+                .find(|v| v.get_name() == tab_ref.conversion_table)
+            {
+                Ok(Some(convert_tab_verb_range(raw_f64, vtab_range)?))
+            } else {
+                Err(ConversionError::TableNotFound(
+                    tab_ref.conversion_table.clone(),
+                ))
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

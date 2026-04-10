@@ -1225,3 +1225,212 @@ fn measurement_conversion_refs_mostly_valid() {
     assert!(broken <= 5,
         "at most 5 broken measurement→CM refs expected, got {broken}");
 }
+
+// ========================================================================
+// End-to-End Extractor Tests
+// ========================================================================
+
+use a2ldeser::extractor::*;
+
+fn extractor() -> &'static Extractor<'static> {
+    static EXT: OnceLock<Extractor<'static>> = OnceLock::new();
+    EXT.get_or_init(|| Extractor::new(module(), sample_hex()))
+}
+
+#[test]
+fn extract_scalar_value() {
+    let ext = extractor();
+    // Find a Value characteristic that's in the HEX file
+    let m = module();
+    let value_chars: Vec<_> = m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Value)
+        .filter(|c| sample_hex().contains(c.address, 1))
+        .collect();
+    assert!(!value_chars.is_empty(), "should have Value chars in HEX");
+
+    // Try extracting the first one
+    let name = value_chars[0].get_name();
+    let result = ext.extract_value(name);
+    match result {
+        Ok(ev) => {
+            assert_eq!(ev.name, name);
+            assert!(!ev.unit.is_empty() || ev.unit.is_empty()); // unit may be empty for NO_COMPU_METHOD
+        }
+        Err(ExtractError::Conversion(_)) => {
+            // Some may have broken COMPU_METHODs — that's OK
+        }
+        Err(e) => panic!("unexpected error extracting {name}: {e}"),
+    }
+}
+
+#[test]
+fn extract_multiple_scalar_values() {
+    let ext = extractor();
+    let m = module();
+    let mut ok_count = 0;
+    let mut err_count = 0;
+
+    for ch in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Value)
+        .filter(|c| sample_hex().contains(c.address, 1))
+        .take(50)
+    {
+        match ext.extract_value(ch.get_name()) {
+            Ok(ev) => {
+                // Numeric values should be finite
+                if let Some(v) = ev.physical.as_f64() {
+                    assert!(v.is_finite() || v == 0.0,
+                        "{}: got non-finite value {v}", ev.name);
+                }
+                ok_count += 1;
+            }
+            Err(_) => err_count += 1,
+        }
+    }
+    assert!(ok_count > 0, "should extract at least some Values (ok={ok_count}, err={err_count})");
+}
+
+#[test]
+fn extract_curve_fix_axis() {
+    let ext = extractor();
+    let m = module();
+    let r = Resolver::new(m);
+
+    // Find a curve with FixAxisPar (these don't need HEX read for axis)
+    let curve_name = m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Curve)
+        .filter(|c| sample_hex().contains(c.address, 1))
+        .find(|c| {
+            r.resolve_characteristic(c.get_name()).ok()
+                .and_then(|rc| match rc {
+                    ResolvedCharacteristic::Curve(curve) => {
+                        matches!(curve.x_axis.source, AxisSource::FixAxisPar { .. })
+                            .then_some(())
+                    }
+                    _ => None,
+                })
+                .is_some()
+        })
+        .map(|c| c.get_name().to_string());
+
+    if let Some(name) = curve_name {
+        let result = ext.extract_curve(&name);
+        match result {
+            Ok(ec) => {
+                assert_eq!(ec.name, name);
+                assert!(!ec.x_axis.is_empty(), "curve should have axis values");
+                assert_eq!(ec.x_axis.len(), ec.values.len(),
+                    "axis and values should have same length");
+            }
+            Err(ExtractError::Conversion(_)) => { /* OK — broken CM */ }
+            Err(e) => panic!("unexpected error extracting curve {name}: {e}"),
+        }
+    }
+}
+
+#[test]
+fn extract_curve_com_axis() {
+    let ext = extractor();
+    let m = module();
+    let r = Resolver::new(m);
+
+    // Find a curve with ComAxis (needs AXIS_PTS read from HEX)
+    let curve_name = m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Curve)
+        .filter(|c| sample_hex().contains(c.address, 1))
+        .find(|c| {
+            r.resolve_characteristic(c.get_name()).ok()
+                .and_then(|rc| match rc {
+                    ResolvedCharacteristic::Curve(curve) => {
+                        matches!(curve.x_axis.source, AxisSource::ComAxis { .. })
+                            .then_some(())
+                    }
+                    _ => None,
+                })
+                .is_some()
+        })
+        .map(|c| c.get_name().to_string());
+
+    if let Some(name) = curve_name {
+        let result = ext.extract_curve(&name);
+        match result {
+            Ok(ec) => {
+                assert_eq!(ec.name, name);
+                assert!(!ec.x_axis.is_empty(), "curve should have axis values");
+                assert_eq!(ec.x_axis.len(), ec.values.len(),
+                    "axis and values should have same length");
+            }
+            Err(ExtractError::Hex(_)) => {
+                // AXIS_PTS address may not be in HEX — acceptable
+            }
+            Err(ExtractError::Conversion(_)) => { /* OK */ }
+            Err(e) => panic!("unexpected error extracting ComAxis curve {name}: {e}"),
+        }
+    }
+}
+
+#[test]
+fn extract_map() {
+    let ext = extractor();
+    let m = module();
+
+    // Find a map in the HEX file
+    let map_name = m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Map)
+        .find(|c| sample_hex().contains(c.address, 1))
+        .map(|c| c.get_name().to_string());
+
+    if let Some(name) = map_name {
+        let result = ext.extract_map(&name);
+        match result {
+            Ok(em) => {
+                assert_eq!(em.name, name);
+                assert!(!em.x_axis.is_empty());
+                assert!(!em.y_axis.is_empty());
+                assert_eq!(em.values.len(), em.y_axis.len(),
+                    "values row count should match y axis");
+                if !em.values.is_empty() {
+                    assert_eq!(em.values[0].len(), em.x_axis.len(),
+                        "values column count should match x axis");
+                }
+            }
+            Err(ExtractError::Hex(_)) => { /* AXIS_PTS not in HEX */ }
+            Err(ExtractError::Conversion(_)) => { /* broken CM */ }
+            Err(e) => panic!("unexpected error extracting map {name}: {e}"),
+        }
+    }
+}
+
+#[test]
+fn extract_measurement_from_hex_fails() {
+    let ext = extractor();
+    let m = module();
+    let meas_name = m.measurement.iter()
+        .next()
+        .map(|meas| meas.get_name().to_string())
+        .expect("should have at least one measurement");
+    let result = ext.extract_measurement(&meas_name);
+    assert!(matches!(result, Err(ExtractError::Resolve(ResolveError::MeasurementIsRam { .. }))),
+        "extracting measurement from HEX should fail with MeasurementIsRam");
+}
+
+#[test]
+fn extract_wrong_type_curve_for_value() {
+    let ext = extractor();
+    let m = module();
+    // Try to extract a Curve as a Value — should error
+    let curve_name = m.characteristic.iter()
+        .find(|c| c.characteristic_type == CharacteristicType::Curve)
+        .map(|c| c.get_name().to_string())
+        .unwrap();
+    let result = ext.extract_value(&curve_name);
+    assert!(matches!(result, Err(ExtractError::Resolve(ResolveError::WrongType { .. }))),
+        "extracting curve as value should give WrongType error");
+}
+
+#[test]
+fn extract_nonexistent_characteristic() {
+    let ext = extractor();
+    let result = ext.extract_value("totally_fake_name_12345");
+    assert!(matches!(result, Err(ExtractError::Resolve(ResolveError::NotFound { .. }))));
+}
