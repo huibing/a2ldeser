@@ -406,7 +406,8 @@ fn cmd_export(a2l_path: &Path, hex_path: &Path, output: &Path) {
 
     match ext_fmt {
         ExportFormat::Json => {
-            serde_json::to_writer_pretty(&mut file, &report.successes).unwrap_or_else(|e| {
+            let val = serde_json::to_value(&report.successes).unwrap();
+            write!(file, "{}", compact_json(&val, 0)).unwrap_or_else(|e| {
                 eprintln!("Error writing JSON: {e}");
                 process::exit(1);
             });
