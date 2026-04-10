@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use a2lfile::A2lObjectName;
@@ -55,8 +55,8 @@ fn main() {
     }
 }
 
-fn load_a2l(path: &PathBuf) -> a2lfile::A2lFile {
-    let (a2l, _) = a2lfile::load(&path.as_os_str().to_os_string(), None, false)
+fn load_a2l(path: &Path) -> a2lfile::A2lFile {
+    let (a2l, _) = a2lfile::load(path.as_os_str(), None, false)
         .unwrap_or_else(|e| {
             eprintln!("Error loading A2L file: {e}");
             process::exit(1);
@@ -68,7 +68,7 @@ fn load_a2l(path: &PathBuf) -> a2lfile::A2lFile {
 fn parse_hex_bytes(s: &str) -> Vec<u8> {
     let s = s.trim().strip_prefix("0x").or_else(|| s.trim().strip_prefix("0X")).unwrap_or(s.trim());
     let hex: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         eprintln!("Error: hex string must have even number of digits, got '{hex}'");
         process::exit(1);
     }
@@ -84,7 +84,7 @@ fn parse_hex_bytes(s: &str) -> Vec<u8> {
         .collect()
 }
 
-fn cmd_extract(a2l_path: &PathBuf, hex_path: &PathBuf, name: &str) {
+fn cmd_extract(a2l_path: &Path, hex_path: &Path, name: &str) {
     let a2l = load_a2l(a2l_path);
     let module = &a2l.project.module[0];
 
@@ -142,7 +142,7 @@ fn cmd_extract(a2l_path: &PathBuf, hex_path: &PathBuf, name: &str) {
     }
 }
 
-fn cmd_decode(a2l_path: &PathBuf, name: &str, raw_hex: &str) {
+fn cmd_decode(a2l_path: &Path, name: &str, raw_hex: &str) {
     let a2l = load_a2l(a2l_path);
     let module = &a2l.project.module[0];
     let resolver = Resolver::new(module);
@@ -175,28 +175,28 @@ fn cmd_decode(a2l_path: &PathBuf, name: &str, raw_hex: &str) {
                     eprintln!("Error: characteristic '{name}' has no fnc_values data type");
                     process::exit(1);
                 });
-                (dt.clone(), v.conversion.clone(), v.unit.clone())
+                (*dt, v.conversion.clone(), v.unit.clone())
             }
             ResolvedCharacteristic::ValBlk(vb) => {
                 let dt = vb.layout.fnc_values_datatype.as_ref().unwrap_or_else(|| {
                     eprintln!("Error: characteristic '{name}' has no fnc_values data type");
                     process::exit(1);
                 });
-                (dt.clone(), vb.conversion.clone(), vb.unit.clone())
+                (*dt, vb.conversion.clone(), vb.unit.clone())
             }
             ResolvedCharacteristic::Curve(c) => {
                 let dt = c.layout.fnc_values_datatype.as_ref().unwrap_or_else(|| {
                     eprintln!("Error: characteristic '{name}' has no fnc_values data type");
                     process::exit(1);
                 });
-                (dt.clone(), c.conversion.clone(), c.unit.clone())
+                (*dt, c.conversion.clone(), c.unit.clone())
             }
             ResolvedCharacteristic::Map(m) => {
                 let dt = m.layout.fnc_values_datatype.as_ref().unwrap_or_else(|| {
                     eprintln!("Error: characteristic '{name}' has no fnc_values data type");
                     process::exit(1);
                 });
-                (dt.clone(), m.conversion.clone(), m.unit.clone())
+                (*dt, m.conversion.clone(), m.unit.clone())
             }
             ResolvedCharacteristic::Ascii(_) => {
                 // For ASCII, just display the bytes as a string
@@ -227,7 +227,7 @@ fn cmd_decode(a2l_path: &PathBuf, name: &str, raw_hex: &str) {
     process::exit(1);
 }
 
-fn cmd_list(a2l_path: &PathBuf) {
+fn cmd_list(a2l_path: &Path) {
     let a2l = load_a2l(a2l_path);
     let module = &a2l.project.module[0];
 

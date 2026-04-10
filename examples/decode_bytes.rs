@@ -24,7 +24,7 @@ fn main() {
 
     // Load A2L
     let (a2l, _) =
-        a2lfile::load(&std::ffi::OsString::from(&args[1]), None, false).expect("Failed to load A2L");
+        a2lfile::load(std::ffi::OsString::from(&args[1]), None, false).expect("Failed to load A2L");
     let module = &a2l.project.module[0];
     let resolver = Resolver::new(module);
 
@@ -68,12 +68,12 @@ fn main() {
         use a2ldeser::resolver::ResolvedCharacteristic;
         let (datatype, conversion, unit) = match &resolved {
             ResolvedCharacteristic::Value(v) => (
-                v.layout.fnc_values_datatype.as_ref().expect("no fnc_values").clone(),
+                *v.layout.fnc_values_datatype.as_ref().expect("no fnc_values"),
                 v.conversion.clone(),
                 v.unit.clone(),
             ),
             ResolvedCharacteristic::ValBlk(vb) => (
-                vb.layout.fnc_values_datatype.as_ref().expect("no fnc_values").clone(),
+                *vb.layout.fnc_values_datatype.as_ref().expect("no fnc_values"),
                 vb.conversion.clone(),
                 vb.unit.clone(),
             ),
@@ -115,7 +115,7 @@ fn main() {
 fn parse_hex_bytes(s: &str) -> Vec<u8> {
     let s = s.trim().strip_prefix("0x").or_else(|| s.trim().strip_prefix("0X")).unwrap_or(s.trim());
     let hex: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    assert!(hex.len() % 2 == 0, "hex string must have even number of digits");
+    assert!(hex.len().is_multiple_of(2), "hex string must have even number of digits");
     hex.as_bytes()
         .chunks(2)
         .map(|chunk| {

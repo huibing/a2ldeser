@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn identical_passthrough() {
         assert_eq!(convert_identical(42.0), 42.0);
-        assert_eq!(convert_identical(-3.14), -3.14);
+        assert_eq!(convert_identical(-3.125), -3.125);
         assert_eq!(convert_identical(0.0), 0.0);
     }
 

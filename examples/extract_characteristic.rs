@@ -20,7 +20,7 @@ fn main() {
 
     // Step 1: Load the A2L file (metadata)
     let (a2l, _warnings) =
-        a2lfile::load(&std::ffi::OsString::from(&args[1]), None, false).expect("Failed to load A2L");
+        a2lfile::load(std::ffi::OsString::from(&args[1]), None, false).expect("Failed to load A2L");
     let module = &a2l.project.module[0];
 
     // Step 2: Load the Intel HEX file (binary flash data)

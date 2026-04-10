@@ -361,8 +361,8 @@ impl<'a> Resolver<'a> {
 
         Ok(ResolvedLayout {
             name: rl.get_name().to_string(),
-            fnc_values_datatype: rl.fnc_values.as_ref().map(|f| f.datatype.clone()),
-            index_mode: rl.fnc_values.as_ref().map(|f| f.index_mode.clone()),
+            fnc_values_datatype: rl.fnc_values.as_ref().map(|f| f.datatype),
+            index_mode: rl.fnc_values.as_ref().map(|f| f.index_mode),
         })
     }
 
@@ -384,7 +384,7 @@ impl<'a> Resolver<'a> {
         let source = self.resolve_axis_source(char_name, ad)?;
 
         Ok(ResolvedAxis {
-            attribute: ad.attribute.clone(),
+            attribute: ad.attribute,
             conversion: ad.conversion.clone(),
             unit,
             max_axis_points: ad.max_axis_points,
@@ -401,8 +401,8 @@ impl<'a> Resolver<'a> {
         // Check for FIX_AXIS_PAR
         if let Some(ref fap) = ad.fix_axis_par {
             return Ok(AxisSource::FixAxisPar {
-                offset: fap.offset as f64,
-                shift: fap.shift as f64,
+                offset: fap.offset,
+                shift: fap.shift,
                 count: fap.number_apo,
             });
         }
@@ -530,7 +530,7 @@ impl<'a> Resolver<'a> {
             name: meas.get_name().to_string(),
             long_identifier: meas.long_identifier.clone(),
             ecu_address,
-            datatype: meas.datatype.clone(),
+            datatype: meas.datatype,
             conversion: meas.conversion.clone(),
             unit,
             bit_mask,

@@ -58,11 +58,10 @@ impl HexMemory {
     pub fn from_string(content: &str) -> Result<Self, HexError> {
         let mut segments: BTreeMap<u32, Vec<u8>> = BTreeMap::new();
         let mut extended_address: u32 = 0;
-        let mut line_num: usize = 0;
 
         let reader = ihex::Reader::new(content);
-        for result in reader {
-            line_num += 1;
+        for (line_num, result) in reader.enumerate() {
+            let line_num = line_num + 1;
             let record = result.map_err(|e| HexError::Parse {
                 line: line_num,
                 detail: e.to_string(),
@@ -106,12 +105,11 @@ impl HexMemory {
                 // Contiguous: extend the existing segment
                 seg_data.extend_from_slice(data);
                 // Check if we can merge with the next segment
-                if let Some((&next_start, _)) = segments.range(end_address..).next() {
-                    if next_start == end_address {
+                if let Some((&next_start, _)) = segments.range(end_address..).next()
+                    && next_start == end_address {
                         let next_data = segments.remove(&next_start).unwrap();
                         segments.get_mut(&seg_start).unwrap().extend(next_data);
                     }
-                }
                 return;
             }
             if seg_end > address {
@@ -131,15 +129,14 @@ impl HexMemory {
 
         // No existing segment to extend; create a new one
         // But first check if it's contiguous with the next segment
-        if let Some((&next_start, _)) = segments.range(address..).next() {
-            if next_start == end_address {
+        if let Some((&next_start, _)) = segments.range(address..).next()
+            && next_start == end_address {
                 let next_data = segments.remove(&next_start).unwrap();
                 let mut new_data = data.to_vec();
                 new_data.extend(next_data);
                 segments.insert(address, new_data);
                 return;
             }
-        }
 
         segments.insert(address, data.to_vec());
     }

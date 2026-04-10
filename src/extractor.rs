@@ -206,8 +206,8 @@ impl<'a> Extractor<'a> {
 
                 let size = A2lValue::datatype_size(datatype);
                 let bytes = self.hex.read_bytes(v.address, size)?;
-                let raw = A2lValue::from_bytes(datatype, &bytes)
-                    .ok_or_else(|| ExtractError::Hex(HexError::AddressNotFound {
+                let raw = A2lValue::from_bytes(datatype, bytes)
+                    .ok_or(ExtractError::Hex(HexError::AddressNotFound {
                         address: v.address,
                         length: size,
                     }))?;
@@ -327,7 +327,7 @@ impl<'a> Extractor<'a> {
                     IndexMode::RowDir => {
                         // Row-major: val[y][x] = byte[(y * x_count + x) * elem_size]
                         self.read_2d_values(
-                            &bytes, datatype, elem_size,
+                            bytes, datatype, elem_size,
                             x_count, y_count, &m.conversion,
                             |x, y| (y * x_count + x) * elem_size,
                         )?
@@ -335,7 +335,7 @@ impl<'a> Extractor<'a> {
                     IndexMode::ColumnDir => {
                         // Column-major: val[y][x] = byte[(x * y_count + y) * elem_size]
                         self.read_2d_values(
-                            &bytes, datatype, elem_size,
+                            bytes, datatype, elem_size,
                             x_count, y_count, &m.conversion,
                             |x, y| (x * y_count + y) * elem_size,
                         )?
@@ -458,6 +458,7 @@ impl<'a> Extractor<'a> {
     // ====================================================================
 
     /// Read a 2D grid of values from flat bytes using a custom offset function.
+    #[allow(clippy::too_many_arguments)]
     fn read_2d_values(
         &self,
         bytes: &[u8],
@@ -474,7 +475,7 @@ impl<'a> Extractor<'a> {
             for x in 0..x_count {
                 let offset = offset_fn(x, y);
                 let raw = A2lValue::from_bytes(datatype, &bytes[offset..])
-                    .ok_or_else(|| ExtractError::Hex(HexError::AddressNotFound {
+                    .ok_or(ExtractError::Hex(HexError::AddressNotFound {
                         address: offset as u32,
                         length: elem_size,
                     }))?;
@@ -671,7 +672,7 @@ mod tests {
     fn row_dir_offset_calculation() {
         // 3x2 map (3 columns, 2 rows), 4 bytes each
         let x_count = 3;
-        let y_count = 2;
+        let _y_count = 2;
         let elem_size = 4;
         let row_dir = |x: usize, y: usize| (y * x_count + x) * elem_size;
 
@@ -688,7 +689,7 @@ mod tests {
     #[test]
     fn column_dir_offset_calculation() {
         // 3x2 map (3 columns, 2 rows), 4 bytes each
-        let x_count = 3;
+        let _x_count = 3;
         let y_count = 2;
         let elem_size = 4;
         let col_dir = |x: usize, y: usize| (x * y_count + y) * elem_size;

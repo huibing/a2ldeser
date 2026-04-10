@@ -16,7 +16,7 @@ fn main() {
     }
 
     let (a2l, _) =
-        a2lfile::load(&std::ffi::OsString::from(&args[1]), None, false).expect("Failed to load A2L");
+        a2lfile::load(std::ffi::OsString::from(&args[1]), None, false).expect("Failed to load A2L");
     let module = &a2l.project.module[0];
 
     // --- Characteristics summary ---

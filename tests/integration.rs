@@ -16,7 +16,7 @@ fn sample_a2l() -> &'static A2lFile {
     static A2L: OnceLock<A2lFile> = OnceLock::new();
     A2L.get_or_init(|| {
         let (a2l, _) = a2lfile::load(
-            &std::ffi::OsString::from("refs/zc-blanc_rear_c-target-xcp.a2l"),
+            std::ffi::OsString::from("refs/zc-blanc_rear_c-target-xcp.a2l"),
             None,
             false,
         )
@@ -467,13 +467,11 @@ fn all_curve_com_axis_refs_resolve() {
         .filter(|c| c.characteristic_type == CharacteristicType::Curve)
     {
         for axis in &curve.axis_descr {
-            if axis.attribute == AxisDescrAttribute::ComAxis {
-                if let Some(ref apr) = axis.axis_pts_ref {
-                    if m.axis_pts.iter().find(|a| a.get_name() == apr.axis_points).is_none() {
+            if axis.attribute == AxisDescrAttribute::ComAxis
+                && let Some(ref apr) = axis.axis_pts_ref
+                    && m.axis_pts.iter().find(|a| a.get_name() == apr.axis_points).is_none() {
                         unresolved.push((curve.get_name().to_string(), apr.axis_points.clone()));
                     }
-                }
-            }
         }
     }
 
@@ -544,17 +542,15 @@ fn all_map_com_axis_refs_resolve() {
         .filter(|c| c.characteristic_type == CharacteristicType::Map)
     {
         for (i, axis) in map.axis_descr.iter().enumerate() {
-            if axis.attribute == AxisDescrAttribute::ComAxis {
-                if let Some(ref apr) = axis.axis_pts_ref {
-                    if m.axis_pts.iter().find(|a| a.get_name() == apr.axis_points).is_none() {
+            if axis.attribute == AxisDescrAttribute::ComAxis
+                && let Some(ref apr) = axis.axis_pts_ref
+                    && m.axis_pts.iter().find(|a| a.get_name() == apr.axis_points).is_none() {
                         unresolved.push((
                             map.get_name().to_string(),
                             format!("axis[{}]", i),
                             apr.axis_points.clone(),
                         ));
                     }
-                }
-            }
         }
     }
 
@@ -784,11 +780,10 @@ fn all_axis_descr_axis_pts_refs_resolve() {
     let mut broken = Vec::new();
     for ch in &m.characteristic {
         for ad in &ch.axis_descr {
-            if let Some(ref apr) = ad.axis_pts_ref {
-                if !ap.contains(&apr.axis_points) {
+            if let Some(ref apr) = ad.axis_pts_ref
+                && !ap.contains(&apr.axis_points) {
                     broken.push(format!("{} -> {}", ch.get_name(), apr.axis_points));
                 }
-            }
         }
     }
     assert!(broken.is_empty(), "broken axis_descr->axis_pts refs: {:?}", broken);
@@ -1146,10 +1141,8 @@ fn all_measurements_are_ram() {
     let m = module();
     let r = Resolver::new(m);
     let results = r.resolve_all_measurements();
-    for result in &results {
-        if let Ok(meas) = result {
-            assert!(meas.is_ram(), "{} should be RAM", meas.name);
-        }
+    for meas in results.iter().flatten() {
+        assert!(meas.is_ram(), "{} should be RAM", meas.name);
     }
 }
 
@@ -1464,17 +1457,14 @@ fn map_column_dir_dimensions_consistent() {
         .filter(|c| sample_hex().contains(c.address, 1))
         .take(20)
     {
-        match ext.extract_map(ch.get_name()) {
-            Ok(em) => {
-                assert_eq!(em.values.len(), em.y_axis.len(),
-                    "{}: row count {} != y_axis len {}", em.name, em.values.len(), em.y_axis.len());
-                for (i, row) in em.values.iter().enumerate() {
-                    assert_eq!(row.len(), em.x_axis.len(),
-                        "{}: row[{i}] len {} != x_axis len {}", em.name, row.len(), em.x_axis.len());
-                }
-                extracted += 1;
+        if let Ok(em) = ext.extract_map(ch.get_name()) {
+            assert_eq!(em.values.len(), em.y_axis.len(),
+                "{}: row count {} != y_axis len {}", em.name, em.values.len(), em.y_axis.len());
+            for (i, row) in em.values.iter().enumerate() {
+                assert_eq!(row.len(), em.x_axis.len(),
+                    "{}: row[{i}] len {} != x_axis len {}", em.name, row.len(), em.x_axis.len());
             }
-            Err(_) => {} // skip failures
+            extracted += 1;
         }
     }
     assert!(extracted > 0, "should extract at least one MAP");
