@@ -174,6 +174,29 @@ pub struct ResolvedValue {
     pub layout: ResolvedLayout,
 }
 
+/// Fully resolved VAL_BLK (1D array of calibration values) metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedValBlk {
+    pub name: String,
+    pub long_identifier: String,
+    pub address: u32,
+    pub conversion: String,
+    pub unit: String,
+    pub layout: ResolvedLayout,
+    /// Number of elements (from the `NUMBER` keyword).
+    pub count: u16,
+}
+
+/// Fully resolved ASCII (string calibration) metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedAscii {
+    pub name: String,
+    pub long_identifier: String,
+    pub address: u32,
+    /// Byte length (from the `NUMBER` keyword).
+    pub length: u16,
+}
+
 /// Fully resolved MEASUREMENT (RAM variable) metadata.
 ///
 /// Measurements are runtime variables stored in ECU RAM. Their addresses
@@ -220,6 +243,8 @@ impl ResolvedMeasurement {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedCharacteristic {
     Value(ResolvedValue),
+    ValBlk(ResolvedValBlk),
+    Ascii(ResolvedAscii),
     Curve(ResolvedCurve),
     Map(ResolvedMap),
 }
@@ -257,7 +282,7 @@ impl<'a> Resolver<'a> {
         let unit = self.lookup_unit(&ch.conversion);
 
         match ch.characteristic_type {
-            CharacteristicType::Value | CharacteristicType::ValBlk => {
+            CharacteristicType::Value => {
                 Ok(ResolvedCharacteristic::Value(ResolvedValue {
                     name: ch.get_name().to_string(),
                     long_identifier: ch.long_identifier.clone(),
@@ -265,6 +290,27 @@ impl<'a> Resolver<'a> {
                     conversion: ch.conversion.clone(),
                     unit,
                     layout,
+                }))
+            }
+            CharacteristicType::ValBlk => {
+                let count = ch.number.as_ref().map(|n| n.number).unwrap_or(1);
+                Ok(ResolvedCharacteristic::ValBlk(ResolvedValBlk {
+                    name: ch.get_name().to_string(),
+                    long_identifier: ch.long_identifier.clone(),
+                    address: ch.address,
+                    conversion: ch.conversion.clone(),
+                    unit,
+                    layout,
+                    count,
+                }))
+            }
+            CharacteristicType::Ascii => {
+                let length = ch.number.as_ref().map(|n| n.number).unwrap_or(0);
+                Ok(ResolvedCharacteristic::Ascii(ResolvedAscii {
+                    name: ch.get_name().to_string(),
+                    long_identifier: ch.long_identifier.clone(),
+                    address: ch.address,
+                    length,
                 }))
             }
             CharacteristicType::Curve => {
@@ -293,19 +339,9 @@ impl<'a> Resolver<'a> {
                     y_axis,
                 }))
             }
-            CharacteristicType::Ascii => {
-                Ok(ResolvedCharacteristic::Value(ResolvedValue {
-                    name: ch.get_name().to_string(),
-                    long_identifier: ch.long_identifier.clone(),
-                    address: ch.address,
-                    conversion: ch.conversion.clone(),
-                    unit,
-                    layout,
-                }))
-            }
             _ => Err(ResolveError::WrongType {
                 name: name.to_string(),
-                expected: "Value, Curve, Map, or Ascii",
+                expected: "Value, ValBlk, Curve, Map, or Ascii",
                 actual: format!("{:?}", ch.characteristic_type),
             }),
         }

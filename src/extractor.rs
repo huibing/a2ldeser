@@ -144,6 +144,23 @@ pub struct ExtractedMap {
     pub unit: String,
 }
 
+/// Extracted VAL_BLK (1D array of calibration values) characteristic.
+#[derive(Debug, Clone)]
+pub struct ExtractedValBlk {
+    pub name: String,
+    /// Converted physical values.
+    pub values: Vec<PhysicalValue>,
+    pub unit: String,
+}
+
+/// Extracted ASCII (string) characteristic.
+#[derive(Debug, Clone)]
+pub struct ExtractedAscii {
+    pub name: String,
+    /// Decoded string (UTF-8, trailing NULs stripped).
+    pub text: String,
+}
+
 // ========================================================================
 // Extractor
 // ========================================================================
@@ -331,6 +348,79 @@ impl<'a> Extractor<'a> {
             _ => Err(ExtractError::Resolve(ResolveError::WrongType {
                 name: name.to_string(),
                 expected: "Map",
+                actual: format!("{resolved:?}"),
+            })),
+        }
+    }
+
+    // ====================================================================
+    // VAL_BLK extraction
+    // ====================================================================
+
+    /// Extract a VAL_BLK (1D array) characteristic by name.
+    pub fn extract_val_blk(&self, name: &str) -> Result<ExtractedValBlk, ExtractError> {
+        let resolved = self.resolver.resolve_characteristic(name)?;
+        match resolved {
+            ResolvedCharacteristic::ValBlk(vb) => {
+                let datatype = vb
+                    .layout
+                    .fnc_values_datatype
+                    .as_ref()
+                    .ok_or_else(|| ExtractError::NoFncValues {
+                        layout: vb.layout.name.clone(),
+                    })?;
+
+                let elem_size = A2lValue::datatype_size(datatype);
+                let total_size = elem_size * vb.count as usize;
+                let bytes = self.hex.read_bytes(vb.address, total_size)?;
+
+                let mut values = Vec::with_capacity(vb.count as usize);
+                for i in 0..vb.count as usize {
+                    let offset = i * elem_size;
+                    let raw = A2lValue::from_bytes(datatype, &bytes[offset..])
+                        .ok_or_else(|| ExtractError::Hex(HexError::AddressNotFound {
+                            address: vb.address + offset as u32,
+                            length: elem_size,
+                        }))?;
+                    values.push(self.convert_value(&raw, &vb.conversion)?);
+                }
+
+                Ok(ExtractedValBlk {
+                    name: vb.name,
+                    values,
+                    unit: vb.unit,
+                })
+            }
+            _ => Err(ExtractError::Resolve(ResolveError::WrongType {
+                name: name.to_string(),
+                expected: "ValBlk",
+                actual: format!("{resolved:?}"),
+            })),
+        }
+    }
+
+    // ====================================================================
+    // ASCII extraction
+    // ====================================================================
+
+    /// Extract an ASCII (string) characteristic by name.
+    pub fn extract_ascii(&self, name: &str) -> Result<ExtractedAscii, ExtractError> {
+        let resolved = self.resolver.resolve_characteristic(name)?;
+        match resolved {
+            ResolvedCharacteristic::Ascii(a) => {
+                let bytes = self.hex.read_bytes(a.address, a.length as usize)?;
+                // Strip trailing NULs, then interpret as UTF-8 (lossy)
+                let end = bytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+                let text = String::from_utf8_lossy(&bytes[..end]).into_owned();
+
+                Ok(ExtractedAscii {
+                    name: a.name,
+                    text,
+                })
+            }
+            _ => Err(ExtractError::Resolve(ResolveError::WrongType {
+                name: name.to_string(),
+                expected: "Ascii",
                 actual: format!("{resolved:?}"),
             })),
         }

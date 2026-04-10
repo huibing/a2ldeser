@@ -1479,3 +1479,143 @@ fn map_column_dir_dimensions_consistent() {
     }
     assert!(extracted > 0, "should extract at least one MAP");
 }
+
+// ========================================================================
+// VAL_BLK extraction tests
+// ========================================================================
+
+#[test]
+fn resolve_val_blk_characteristics() {
+    let m = module();
+    let r = Resolver::new(m);
+    let mut resolved = 0;
+    for ch in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::ValBlk)
+        .take(20)
+    {
+        match r.resolve_characteristic(ch.get_name()) {
+            Ok(ResolvedCharacteristic::ValBlk(vb)) => {
+                assert_eq!(vb.name, ch.get_name());
+                assert!(vb.count > 0, "{}: count should be > 0", vb.name);
+                resolved += 1;
+            }
+            other => panic!("expected ValBlk for {}, got: {other:?}", ch.get_name()),
+        }
+    }
+    assert!(resolved > 0, "should resolve at least one VAL_BLK");
+}
+
+#[test]
+fn val_blk_count_matches_number_field() {
+    let m = module();
+    let r = Resolver::new(m);
+    for ch in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::ValBlk)
+    {
+        let expected = ch.number.as_ref().map(|n| n.number).unwrap_or(1);
+        if let Ok(ResolvedCharacteristic::ValBlk(vb)) = r.resolve_characteristic(ch.get_name()) {
+            assert_eq!(vb.count, expected,
+                "{}: count {} != number {}", vb.name, vb.count, expected);
+        }
+    }
+}
+
+#[test]
+fn extract_val_blk_values() {
+    let ext = extractor();
+    let m = module();
+    let mut extracted = 0;
+    for ch in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::ValBlk)
+        .filter(|c| sample_hex().contains(c.address, 1))
+        .take(20)
+    {
+        match ext.extract_val_blk(ch.get_name()) {
+            Ok(evb) => {
+                let expected_count = ch.number.as_ref().map(|n| n.number as usize).unwrap_or(1);
+                assert_eq!(evb.values.len(), expected_count,
+                    "{}: values len {} != expected {}", evb.name, evb.values.len(), expected_count);
+                extracted += 1;
+            }
+            Err(ExtractError::Hex(_)) => {} // address not in HEX
+            Err(ExtractError::Conversion(_)) => {} // broken CM
+            Err(e) => panic!("unexpected error for {}: {e}", ch.get_name()),
+        }
+    }
+    assert!(extracted > 0, "should extract at least one VAL_BLK");
+}
+
+#[test]
+fn extract_val_blk_wrong_type_fails() {
+    let ext = extractor();
+    let m = module();
+    // Try to extract a Value as a ValBlk
+    let value_name = m.characteristic.iter()
+        .find(|c| c.characteristic_type == CharacteristicType::Value)
+        .map(|c| c.get_name().to_string())
+        .unwrap();
+    let result = ext.extract_val_blk(&value_name);
+    assert!(matches!(result, Err(ExtractError::Resolve(ResolveError::WrongType { .. }))),
+        "extracting Value as ValBlk should fail");
+}
+
+// ========================================================================
+// ASCII extraction tests
+// ========================================================================
+
+#[test]
+fn resolve_ascii_characteristics() {
+    let m = module();
+    let r = Resolver::new(m);
+    for ch in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Ascii)
+    {
+        match r.resolve_characteristic(ch.get_name()) {
+            Ok(ResolvedCharacteristic::Ascii(a)) => {
+                assert_eq!(a.name, ch.get_name());
+                let expected_len = ch.number.as_ref().map(|n| n.number).unwrap_or(0);
+                assert_eq!(a.length, expected_len,
+                    "{}: length {} != number {}", a.name, a.length, expected_len);
+            }
+            other => panic!("expected Ascii for {}, got: {other:?}", ch.get_name()),
+        }
+    }
+}
+
+#[test]
+fn extract_ascii_strings() {
+    let ext = extractor();
+    let m = module();
+    let mut extracted = 0;
+    for ch in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Ascii)
+        .filter(|c| sample_hex().contains(c.address, 1))
+    {
+        match ext.extract_ascii(ch.get_name()) {
+            Ok(ea) => {
+                assert!(!ea.text.is_empty(),
+                    "{}: expected non-empty ASCII string", ea.name);
+                // Verify no trailing NULs
+                assert!(!ea.text.ends_with('\0'),
+                    "{}: text should not have trailing NUL", ea.name);
+                extracted += 1;
+            }
+            Err(ExtractError::Hex(_)) => {} // not in HEX
+            Err(e) => panic!("unexpected error for {}: {e}", ch.get_name()),
+        }
+    }
+    assert!(extracted > 0, "should extract at least one ASCII");
+}
+
+#[test]
+fn extract_ascii_wrong_type_fails() {
+    let ext = extractor();
+    let m = module();
+    let value_name = m.characteristic.iter()
+        .find(|c| c.characteristic_type == CharacteristicType::Value)
+        .map(|c| c.get_name().to_string())
+        .unwrap();
+    let result = ext.extract_ascii(&value_name);
+    assert!(matches!(result, Err(ExtractError::Resolve(ResolveError::WrongType { .. }))),
+        "extracting Value as Ascii should fail");
+}
