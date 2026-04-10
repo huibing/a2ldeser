@@ -119,6 +119,12 @@ match resolver.resolve_characteristic("my_curve")? {
     ResolvedCharacteristic::Value(v) => {
         println!("conversion: {}", v.conversion);
     }
+    ResolvedCharacteristic::ValBlk(vb) => {
+        println!("{}: {} elements, layout={}", vb.name, vb.count, vb.layout.name);
+    }
+    ResolvedCharacteristic::Ascii(a) => {
+        println!("{}: {} bytes", a.name, a.length);
+    }
 }
 
 // Bulk resolve
@@ -242,9 +248,17 @@ for (x, y) in curve.x_axis.iter().zip(curve.values.iter()) {
     println!("  x={x} → y={y:?}");
 }
 
-// 2D map
+// 2D map (supports ColumnDir and RowDir index modes)
 let map = ext.extract_map("my_map")?;
 println!("{}x{} map", map.x_axis.len(), map.y_axis.len());
+
+// 1D value block (array of calibration values)
+let vb = ext.extract_val_blk("my_array")?;
+println!("{}: {} elements, unit={}", vb.name, vb.values.len(), vb.unit);
+
+// ASCII string
+let ascii = ext.extract_ascii("CalPartNumber")?;
+println!("{}: \"{}\"", ascii.name, ascii.text);
 
 // Measurement — always fails (RAM, not in flash)
 let err = ext.extract_measurement("engine_speed").unwrap_err();
@@ -255,6 +269,21 @@ let err = ext.extract_measurement("engine_speed").unwrap_err();
 - `PhysicalValue::Numeric(f64)` — from IDENTICAL, LINEAR, RAT_FUNC conversions
 - `PhysicalValue::Verbal(String)` — from TAB_VERB / COMPU_VTAB lookups
 - Use `.as_f64()` or `.as_str()` for type-safe access
+
+**Extracted data types:**
+| Type | Struct | Key fields |
+|------|--------|------------|
+| Value (scalar) | `ExtractedValue` | `raw`, `physical`, `unit` |
+| ValBlk (1D array) | `ExtractedValBlk` | `values: Vec<PhysicalValue>`, `unit` |
+| Curve (1D lookup) | `ExtractedCurve` | `x_axis`, `values`, `unit` |
+| Map (2D lookup) | `ExtractedMap` | `x_axis`, `y_axis`, `values[y][x]`, `unit` |
+| Ascii (string) | `ExtractedAscii` | `text` (NUL-stripped, UTF-8) |
+
+**Deposit direction (index_mode):**
+- `ResolvedLayout.index_mode` comes from `fnc_values.index_mode` in the record layout
+- `ColumnDir` — column-major: `offset = (x * y_count + y) * elem_size`
+- `RowDir` — row-major: `offset = (y * x_count + x) * elem_size`
+- Alternate modes (AlternateCurves, AlternateWithX/Y) return `UnsupportedIndexMode` error
 
 ## Critical Design Areas
 
