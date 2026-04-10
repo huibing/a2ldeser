@@ -4,6 +4,7 @@
 
 use a2lfile::*;
 use a2ldeser::compu_method::*;
+use a2ldeser::resolver::*;
 use a2ldeser::types::A2lValue;
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -893,4 +894,149 @@ fn all_axis_pts_are_referenced() {
         .collect();
     assert!(unreferenced.is_empty(),
         "unreferenced axis_pts: {:?}", unreferenced);
+}
+
+// ========================================================================
+// Resolver Integration Tests
+// ========================================================================
+
+fn resolver() -> Resolver<'static> {
+    Resolver::new(module())
+}
+
+#[test]
+fn resolve_value_characteristic() {
+    let r = resolver();
+    let result = r.resolve_characteristic("g_xcp_enable_status").unwrap();
+    match result {
+        ResolvedCharacteristic::Value(v) => {
+            assert_eq!(v.name, "g_xcp_enable_status");
+            assert_eq!(v.conversion, "NO_COMPU_METHOD");
+            assert_eq!(v.layout.name, "Scalar_ULONG");
+        }
+        other => panic!("expected Value, got {:?}", other),
+    }
+}
+
+#[test]
+fn resolve_curve_characteristic() {
+    let r = resolver();
+    // Pick a known CURVE with ComAxis
+    let curves = r.resolve_all_curves();
+    let first_ok = curves.iter().find(|c| c.is_ok()).unwrap().as_ref().unwrap();
+    assert!(!first_ok.name.is_empty());
+    assert!(!first_ok.layout.name.is_empty());
+
+    match &first_ok.x_axis.source {
+        AxisSource::ComAxis { axis_pts_name, axis_pts_address, .. } => {
+            assert!(!axis_pts_name.is_empty());
+            assert!(*axis_pts_address > 0);
+        }
+        AxisSource::FixAxisPar { count, .. } => {
+            assert!(*count > 0);
+        }
+        other => panic!("unexpected axis source: {:?}", other),
+    }
+}
+
+#[test]
+fn resolve_map_characteristic() {
+    let r = resolver();
+    let maps = r.resolve_all_maps();
+    let first_ok = maps.iter().find(|m| m.is_ok()).unwrap().as_ref().unwrap();
+    assert!(!first_ok.name.is_empty());
+
+    // MAPs should have 2 axes (first is X, second is Y by convention)
+    // The attribute tells axis *type* (ComAxis, FixAxis, etc), not dimension
+    assert!(!first_ok.x_axis.conversion.is_empty() || first_ok.x_axis.conversion == "NO_COMPU_METHOD");
+    assert!(!first_ok.y_axis.conversion.is_empty() || first_ok.y_axis.conversion == "NO_COMPU_METHOD");
+}
+
+#[test]
+fn resolve_all_curves_succeed() {
+    let r = resolver();
+    let results = r.resolve_all_curves();
+    let (ok, err): (Vec<_>, Vec<_>) = results.into_iter().partition(|r| r.is_ok());
+    assert!(err.is_empty(), "failed to resolve {} curves: {:?}",
+        err.len(), err.iter().take(3).collect::<Vec<_>>());
+    assert_eq!(ok.len(), 355, "should resolve all 355 curves");
+}
+
+#[test]
+fn resolve_all_maps_succeed() {
+    let r = resolver();
+    let results = r.resolve_all_maps();
+    let (ok, err): (Vec<_>, Vec<_>) = results.into_iter().partition(|r| r.is_ok());
+    assert!(err.is_empty(), "failed to resolve {} maps: {:?}",
+        err.len(), err.iter().take(3).collect::<Vec<_>>());
+    assert_eq!(ok.len(), 344, "should resolve all 344 maps");
+}
+
+#[test]
+fn resolved_curve_fix_axis_par_values() {
+    let m = module();
+    // Find a CURVE with FixAxisPar
+    let fix_curve = m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Curve)
+        .find(|c| c.axis_descr.first().is_some_and(|ad| ad.fix_axis_par.is_some()))
+        .expect("should have at least one CURVE with FixAxisPar");
+
+    let r = resolver();
+    let resolved = r.resolve_characteristic(fix_curve.get_name()).unwrap();
+    if let ResolvedCharacteristic::Curve(curve) = resolved {
+        if let AxisSource::FixAxisPar { offset, shift, count } = &curve.x_axis.source {
+            let values = Resolver::compute_fix_axis_par_values(*offset, *shift, *count);
+            assert_eq!(values.len(), *count as usize);
+            if *count > 1 {
+                // Verify monotonic sequence
+                for w in values.windows(2) {
+                    assert!(w[1] >= w[0] || *shift < 0.0,
+                        "axis values should be monotonic");
+                }
+            }
+        } else {
+            panic!("expected FixAxisPar source");
+        }
+    }
+}
+
+#[test]
+fn resolved_map_com_axis_has_deposit() {
+    let r = resolver();
+    let maps = r.resolve_all_maps();
+    let map = maps.iter().find(|m| m.is_ok()).unwrap().as_ref().unwrap();
+
+    if let AxisSource::ComAxis { deposit_name, .. } = &map.x_axis.source {
+        // deposit_name is the record layout name from AXIS_PTS.deposit_record
+        assert!(!deposit_name.is_empty(), "ComAxis should have a deposit record");
+    }
+}
+
+#[test]
+fn resolved_curve_has_unit() {
+    let r = resolver();
+    let curves = r.resolve_all_curves();
+    // At least some curves should have non-empty units
+    let with_unit = curves.iter()
+        .filter_map(|c| c.as_ref().ok())
+        .filter(|c| !c.unit.is_empty())
+        .count();
+    assert!(with_unit > 0, "some curves should have physical units");
+}
+
+#[test]
+fn resolve_nonexistent_characteristic_errors() {
+    let r = resolver();
+    let result = r.resolve_characteristic("definitely_not_a_thing");
+    assert!(matches!(result, Err(ResolveError::NotFound { kind: "Characteristic", .. })));
+}
+
+#[test]
+fn list_characteristics_by_type() {
+    let r = resolver();
+    assert_eq!(r.list_characteristics(CharacteristicType::Curve).len(), 355);
+    assert_eq!(r.list_characteristics(CharacteristicType::Map).len(), 344);
+    assert_eq!(r.list_characteristics(CharacteristicType::Value).len(), 9374);
+    assert_eq!(r.list_characteristics(CharacteristicType::ValBlk).len(), 673);
+    assert_eq!(r.list_characteristics(CharacteristicType::Ascii).len(), 5);
 }
