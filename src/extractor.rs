@@ -245,6 +245,19 @@ impl<'a> Extractor<'a> {
                         layout: c.layout.name.clone(),
                     })?;
 
+                // Reject alternate index modes (interleaved data layouts)
+                if let Some(mode) = &c.layout.index_mode {
+                    match mode {
+                        IndexMode::RowDir | IndexMode::ColumnDir => {} // both equivalent for 1D
+                        other => {
+                            return Err(ExtractError::UnsupportedIndexMode {
+                                layout: c.layout.name.clone(),
+                                mode: format!("{other:?}"),
+                            });
+                        }
+                    }
+                }
+
                 let x_count = self.axis_point_count(&c.x_axis)?;
                 let x_axis = self.read_axis_values(&c.x_axis, x_count)?;
                 let x_physical = self.convert_axis_values(&x_axis, &c.x_axis.conversion)?;

@@ -1480,6 +1480,47 @@ fn map_column_dir_dimensions_consistent() {
     assert!(extracted > 0, "should extract at least one MAP");
 }
 
+#[test]
+fn all_curve_layouts_use_column_dir() {
+    let m = module();
+    let r = Resolver::new(m);
+    for ch in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Curve)
+    {
+        if let Ok(ResolvedCharacteristic::Curve(curve)) = r.resolve_characteristic(ch.get_name()) {
+            assert_eq!(
+                curve.layout.index_mode,
+                Some(a2lfile::IndexMode::ColumnDir),
+                "CURVE {} should use ColumnDir", ch.get_name()
+            );
+        }
+    }
+}
+
+#[test]
+fn curve_index_mode_extraction_consistent() {
+    let ext = extractor();
+    let m = module();
+    let mut extracted = 0;
+    for ch in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Curve)
+        .filter(|c| sample_hex().contains(c.address, 1))
+        .take(20)
+    {
+        match ext.extract_curve(ch.get_name()) {
+            Ok(ec) => {
+                assert_eq!(ec.values.len(), ec.x_axis.len(),
+                    "{}: values len {} != x_axis len {}", ec.name, ec.values.len(), ec.x_axis.len());
+                extracted += 1;
+            }
+            Err(ExtractError::Hex(_)) => {}
+            Err(ExtractError::Conversion(_)) => {}
+            Err(e) => panic!("unexpected error for {}: {e}", ch.get_name()),
+        }
+    }
+    assert!(extracted > 0, "should extract at least one CURVE with index_mode check");
+}
+
 // ========================================================================
 // VAL_BLK extraction tests
 // ========================================================================
