@@ -354,3 +354,322 @@ fn a2l_value_sizes_match_datatypes() {
     assert_eq!(A2lValue::datatype_size(&DataType::Float32Ieee), 4);
     assert_eq!(A2lValue::datatype_size(&DataType::Float64Ieee), 8);
 }
+
+// ========================================================================
+// CURVE Axis Resolution Tests
+// ========================================================================
+
+#[test]
+fn curve_axis_type_distribution() {
+    let m = module();
+    let curves: Vec<_> = m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Curve)
+        .collect();
+
+    let fix_axis = curves.iter()
+        .flat_map(|c| &c.axis_descr)
+        .filter(|a| a.attribute == AxisDescrAttribute::FixAxis)
+        .count();
+    let com_axis = curves.iter()
+        .flat_map(|c| &c.axis_descr)
+        .filter(|a| a.attribute == AxisDescrAttribute::ComAxis)
+        .count();
+
+    assert_eq!(fix_axis, 44, "expected 44 FixAxis curves");
+    assert_eq!(com_axis, 311, "expected 311 ComAxis curves");
+    // No StdAxis curves in this file
+    let std_axis = curves.iter()
+        .flat_map(|c| &c.axis_descr)
+        .filter(|a| a.attribute == AxisDescrAttribute::StdAxis)
+        .count();
+    assert_eq!(std_axis, 0);
+}
+
+#[test]
+fn curve_fix_axis_par_resolution() {
+    let m = module();
+    let curve = m.characteristic.iter()
+        .find(|c| c.get_name() == "SnrDE_AsuT_tTransf_CUR_x")
+        .unwrap();
+
+    assert_eq!(curve.characteristic_type, CharacteristicType::Curve);
+    let axis = &curve.axis_descr[0];
+    assert_eq!(axis.attribute, AxisDescrAttribute::FixAxis);
+
+    // FixAxis uses fix_axis_par to define axis points algorithmically
+    let fap = axis.fix_axis_par.as_ref()
+        .expect("FixAxis CURVE should have fix_axis_par");
+    assert_eq!(fap.offset, 0.0);
+    assert_eq!(fap.shift, 0.0);
+    assert_eq!(fap.number_apo, 191);
+
+    // No axis_pts_ref for FixAxis
+    assert!(axis.axis_pts_ref.is_none());
+    // No fix_axis_par_list or fix_axis_par_dist
+    assert!(axis.fix_axis_par_list.is_none());
+    assert!(axis.fix_axis_par_dist.is_none());
+}
+
+#[test]
+fn curve_com_axis_resolves_to_axis_pts() {
+    let m = module();
+    let curve = m.characteristic.iter()
+        .find(|c| c.get_name() == "CDCAct_DmprICmdFrnt_T")
+        .expect("expected CURVE CDCAct_DmprICmdFrnt_T");
+
+    assert_eq!(curve.characteristic_type, CharacteristicType::Curve);
+    assert_eq!(curve.deposit, "Lookup1D_UWORD");
+
+    let axis = &curve.axis_descr[0];
+    assert_eq!(axis.attribute, AxisDescrAttribute::ComAxis);
+    assert_eq!(axis.max_axis_points, 9);
+
+    // ComAxis references an AXIS_PTS object
+    let apr = axis.axis_pts_ref.as_ref()
+        .expect("ComAxis should have axis_pts_ref");
+    assert_eq!(apr.axis_points, "CDCAct_RatDmpg_Ax");
+
+    // Resolve the reference
+    let axis_pts = m.axis_pts.iter()
+        .find(|a| a.get_name() == "CDCAct_RatDmpg_Ax")
+        .expect("referenced AXIS_PTS should exist");
+    assert_eq!(axis_pts.address, 0xA03961F4);
+    assert_eq!(axis_pts.max_axis_points, 9);
+    assert_eq!(axis_pts.conversion, "CDC_CM_single_percent");
+}
+
+#[test]
+fn curve_com_axis_conversion_method_exists() {
+    let m = module();
+    let curve = m.characteristic.iter()
+        .find(|c| c.get_name() == "CDCAct_DmprICmdFrnt_T")
+        .unwrap();
+
+    let axis = &curve.axis_descr[0];
+    let axis_conv = &axis.conversion;
+
+    // The axis conversion method should exist in the module
+    let cm = m.compu_method.iter()
+        .find(|cm| cm.get_name() == axis_conv.as_str());
+    assert!(cm.is_some(), "axis conversion method '{}' should exist", axis_conv);
+}
+
+#[test]
+fn all_curve_com_axis_refs_resolve() {
+    let m = module();
+    let mut unresolved = Vec::new();
+
+    for curve in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Curve)
+    {
+        for axis in &curve.axis_descr {
+            if axis.attribute == AxisDescrAttribute::ComAxis {
+                if let Some(ref apr) = axis.axis_pts_ref {
+                    if m.axis_pts.iter().find(|a| a.get_name() == apr.axis_points).is_none() {
+                        unresolved.push((curve.get_name().to_string(), apr.axis_points.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        unresolved.is_empty(),
+        "unresolved CURVE ComAxis refs: {:?}",
+        unresolved
+    );
+}
+
+// ========================================================================
+// MAP Axis Resolution Tests
+// ========================================================================
+
+#[test]
+fn map_axis_type_distribution() {
+    let m = module();
+    let maps: Vec<_> = m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Map)
+        .collect();
+
+    // All MAP axes in this file are ComAxis
+    let com_axis = maps.iter()
+        .flat_map(|c| &c.axis_descr)
+        .filter(|a| a.attribute == AxisDescrAttribute::ComAxis)
+        .count();
+    assert_eq!(com_axis, 688, "expected 688 ComAxis entries across all MAPs (344 maps × 2 axes)");
+}
+
+#[test]
+fn map_both_axes_resolve_to_axis_pts() {
+    let m = module();
+    let map = m.characteristic.iter()
+        .find(|c| c.get_name() == "LsDut_tThrdLeOffsetDAT_MAP_v")
+        .expect("expected MAP LsDut_tThrdLeOffsetDAT_MAP_v");
+
+    assert_eq!(map.axis_descr.len(), 2);
+
+    // X axis (axis[0])
+    let x_axis = &map.axis_descr[0];
+    let x_ref = x_axis.axis_pts_ref.as_ref()
+        .expect("MAP X axis should have axis_pts_ref");
+    assert_eq!(x_ref.axis_points, "LsDut_tThrdLeDVT2DatOffset_MAP_y");
+    let x_pts = m.axis_pts.iter()
+        .find(|a| a.get_name() == x_ref.axis_points)
+        .expect("X axis AXIS_PTS should exist");
+    assert_eq!(x_pts.address, 0xA0381DB4);
+    assert_eq!(x_pts.max_axis_points, 8);
+
+    // Y axis (axis[1])
+    let y_axis = &map.axis_descr[1];
+    let y_ref = y_axis.axis_pts_ref.as_ref()
+        .expect("MAP Y axis should have axis_pts_ref");
+    assert_eq!(y_ref.axis_points, "LsDut_tThrdLeAmb2DatOffset_MAP_x");
+    let y_pts = m.axis_pts.iter()
+        .find(|a| a.get_name() == y_ref.axis_points)
+        .expect("Y axis AXIS_PTS should exist");
+    assert_eq!(y_pts.address, 0xA0381EF8);
+    assert_eq!(y_pts.max_axis_points, 8);
+}
+
+#[test]
+fn all_map_com_axis_refs_resolve() {
+    let m = module();
+    let mut unresolved = Vec::new();
+
+    for map in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Map)
+    {
+        for (i, axis) in map.axis_descr.iter().enumerate() {
+            if axis.attribute == AxisDescrAttribute::ComAxis {
+                if let Some(ref apr) = axis.axis_pts_ref {
+                    if m.axis_pts.iter().find(|a| a.get_name() == apr.axis_points).is_none() {
+                        unresolved.push((
+                            map.get_name().to_string(),
+                            format!("axis[{}]", i),
+                            apr.axis_points.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        unresolved.is_empty(),
+        "unresolved MAP ComAxis refs: {:?}",
+        unresolved
+    );
+}
+
+#[test]
+fn map_axes_have_consistent_max_points() {
+    let m = module();
+    let map = m.characteristic.iter()
+        .find(|c| c.get_name() == "LsDut_tThrdLeOffsetDAT_MAP_v")
+        .unwrap();
+
+    // axis_descr max_axis_points should match referenced AXIS_PTS max_axis_points
+    for axis in &map.axis_descr {
+        if let Some(ref apr) = axis.axis_pts_ref {
+            let pts = m.axis_pts.iter()
+                .find(|a| a.get_name() == apr.axis_points)
+                .unwrap();
+            assert_eq!(
+                axis.max_axis_points, pts.max_axis_points,
+                "axis_descr max_axis_points should match AXIS_PTS for {}",
+                apr.axis_points
+            );
+        }
+    }
+}
+
+// ========================================================================
+// AXIS_PTS Object Tests
+// ========================================================================
+
+#[test]
+fn axis_pts_have_valid_conversions() {
+    let m = module();
+    let mut missing = Vec::new();
+
+    for ap in &m.axis_pts {
+        if ap.conversion != "NO_COMPU_METHOD" {
+            let found = m.compu_method.iter()
+                .any(|cm| cm.get_name() == ap.conversion.as_str());
+            if !found {
+                missing.push((ap.get_name().to_string(), ap.conversion.clone()));
+            }
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "AXIS_PTS with missing conversion methods: {:?}",
+        missing
+    );
+}
+
+#[test]
+fn axis_pts_addresses_are_nonzero() {
+    let m = module();
+    for ap in &m.axis_pts {
+        assert!(
+            ap.address != 0,
+            "AXIS_PTS {} has zero address",
+            ap.get_name()
+        );
+    }
+}
+
+// ========================================================================
+// Cross-Reference: RecordLayout Resolution for CURVE/MAP
+// ========================================================================
+
+#[test]
+fn all_curve_map_record_layouts_exist() {
+    let m = module();
+    let mut missing = Vec::new();
+
+    for c in m.characteristic.iter()
+        .filter(|c| matches!(c.characteristic_type, CharacteristicType::Curve | CharacteristicType::Map))
+    {
+        let found = m.record_layout.iter()
+            .any(|rl| rl.get_name() == c.deposit.as_str());
+        if !found {
+            missing.push((c.get_name().to_string(), c.deposit.clone()));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "characteristics referencing missing RecordLayouts: {:?}",
+        missing
+    );
+}
+
+#[test]
+fn lookup1d_record_layout_structure() {
+    let m = module();
+    let rl = m.record_layout.iter()
+        .find(|r| r.get_name() == "Lookup1D_FLOAT32_IEEE")
+        .expect("expected Lookup1D_FLOAT32_IEEE RecordLayout");
+
+    // In this file, Lookup layouts define fnc_values for data storage format.
+    // Axis geometry comes from the characteristic's axis_descr, not the layout.
+    let fnc = rl.fnc_values.as_ref().expect("should define fnc_values");
+    assert_eq!(fnc.datatype, DataType::Float32Ieee);
+    assert_eq!(fnc.position, 1);
+}
+
+#[test]
+fn lookup2d_record_layout_structure() {
+    let m = module();
+    let rl = m.record_layout.iter()
+        .find(|r| r.get_name() == "Lookup2D_FLOAT32_IEEE")
+        .expect("expected Lookup2D_FLOAT32_IEEE RecordLayout");
+
+    let fnc = rl.fnc_values.as_ref().expect("should define fnc_values");
+    assert_eq!(fnc.datatype, DataType::Float32Ieee);
+    // Verify ColumnDir index mode (row-major storage)
+    assert_eq!(fnc.index_mode, IndexMode::ColumnDir);
+}
