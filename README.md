@@ -76,6 +76,16 @@ a2ldeser decode my.a2l engine_speed "0x1027"
 a2ldeser list <A2L_FILE>
 ```
 
+### Export all values to file
+
+```sh
+# Export as JSON (array of all extracted objects)
+a2ldeser export <A2L_FILE> <HEX_FILE> -o output.json
+
+# Export as CSV (flat: name, type, x, y, value, unit)
+a2ldeser export <A2L_FILE> <HEX_FILE> -o output.csv
+```
+
 ### Batch extraction with summary
 
 ```sh

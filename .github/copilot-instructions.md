@@ -18,7 +18,7 @@ cargo fmt --check        # check formatting
 
 ## CLI Usage
 
-Four subcommands: `extract`, `decode`, `list`, and `summary`.
+Five subcommands: `extract`, `decode`, `list`, `summary`, and `export`.
 All support `--format json` for structured output.
 
 ```sh
@@ -33,6 +33,10 @@ a2ldeser list <A2L>
 
 # Batch-extract all characteristics and report success/failure summary
 a2ldeser summary <A2L> <HEX>
+
+# Export all values to JSON or CSV file
+a2ldeser export <A2L> <HEX> -o output.json
+a2ldeser export <A2L> <HEX> -o output.csv
 
 # JSON output (any subcommand)
 a2ldeser --format json extract my.a2l my.hex MyParam
