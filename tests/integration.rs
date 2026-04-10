@@ -1777,7 +1777,8 @@ fn json_extracted_value_roundtrip() {
     let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
     assert_eq!(parsed["name"], "g_xcp_enable_status");
     assert!(parsed["raw"].is_object());
-    assert!(parsed["physical"].is_object());
+    // physical is now untagged — number or string, not an object
+    assert!(parsed["physical"].is_number() || parsed["physical"].is_string());
 }
 
 #[test]
@@ -1867,8 +1868,9 @@ fn json_physical_value_numeric_format() {
     let val = PhysicalValue::Numeric(42.5);
     let json = serde_json::to_string(&val).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert!(parsed["Numeric"].is_number());
-    assert_eq!(parsed["Numeric"].as_f64().unwrap(), 42.5);
+    // Untagged: serializes directly as a number
+    assert!(parsed.is_number());
+    assert_eq!(parsed.as_f64().unwrap(), 42.5);
 }
 
 #[test]
@@ -1876,7 +1878,9 @@ fn json_physical_value_verbal_format() {
     let val = PhysicalValue::Verbal("ON".to_string());
     let json = serde_json::to_string(&val).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed["Verbal"], "ON");
+    // Untagged: serializes directly as a string
+    assert!(parsed.is_string());
+    assert_eq!(parsed.as_str().unwrap(), "ON");
 }
 
 #[test]

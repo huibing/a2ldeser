@@ -512,9 +512,45 @@ fn fmt_phys(v: &PhysicalValue) -> String {
 fn output_extracted(obj: &ExtractedObject, fmt: Format) {
     match fmt {
         Format::Json => {
-            println!("{}", serde_json::to_string_pretty(obj).unwrap());
+            let val = serde_json::to_value(obj).unwrap();
+            println!("{}", compact_json(&val, 0));
         }
         Format::Text => print_extracted_text(obj),
+    }
+}
+
+/// Pretty-print JSON but collapse leaf arrays (arrays of primitives) to single lines.
+fn compact_json(val: &serde_json::Value, indent: usize) -> String {
+    use serde_json::Value;
+    let pad = "  ".repeat(indent);
+    let pad_inner = "  ".repeat(indent + 1);
+
+    match val {
+        Value::Object(map) => {
+            if map.is_empty() {
+                return "{}".to_string();
+            }
+            let entries: Vec<String> = map.iter()
+                .map(|(k, v)| format!("{pad_inner}\"{k}\": {}", compact_json(v, indent + 1)))
+                .collect();
+            format!("{{\n{}\n{pad}}}", entries.join(",\n"))
+        }
+        Value::Array(arr) => {
+            if arr.is_empty() {
+                return "[]".to_string();
+            }
+            // Leaf array: all elements are primitives → one line
+            if arr.iter().all(|v| matches!(v, Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_))) {
+                let items: Vec<String> = arr.iter().map(|v| v.to_string()).collect();
+                return format!("[{}]", items.join(", "));
+            }
+            // Nested array: each element on its own line
+            let entries: Vec<String> = arr.iter()
+                .map(|v| format!("{pad_inner}{}", compact_json(v, indent + 1)))
+                .collect();
+            format!("[\n{}\n{pad}]", entries.join(",\n"))
+        }
+        _ => val.to_string(),
     }
 }
 

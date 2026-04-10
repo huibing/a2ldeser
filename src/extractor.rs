@@ -83,6 +83,7 @@ impl From<ConversionError> for ExtractError {
 
 /// A physical value that may be numeric or verbal (string).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(untagged)]
 pub enum PhysicalValue {
     /// Numeric physical value (from IDENTICAL, LINEAR, RAT_FUNC, etc.).
     Numeric(f64),
