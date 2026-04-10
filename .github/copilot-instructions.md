@@ -23,8 +23,7 @@ The `a2lfile` crate handles all A2L parsing. Core usage pattern:
 ```rust
 use a2lfile::*;
 
-let mut logmsgs = Vec::<A2LError>::new();
-let a2l = a2lfile::load(&input_path, None, &mut logmsgs, false)
+let (a2l, logmsgs) = a2lfile::load(&input_path, None, false)
     .expect("could not load a2l file");
 
 // Access data through the typed AST:
@@ -35,12 +34,12 @@ let a2l = a2lfile::load(&input_path, None, &mut logmsgs, false)
 //   a2l.project.module[0].axis_pts
 ```
 
-Key `a2lfile` features to leverage:
-- `a2lfile::load()` — parse an A2L file into a typed struct hierarchy
-- `.check()` — consistency validation
-- `.sort_new_items()` — sort after modifications
-- `.write()` — serialize back to A2L format
-- IF_DATA blocks are accessible for protocol-specific data (e.g., XCP config)
+**API notes:**
+- `load()` returns `(A2lFile, Vec<A2lError>)` — a tuple, not a single value
+- `name` fields on all named objects are `pub(crate)` — use `get_name()` from the `A2lObjectName` trait
+- Most other fields (e.g., `datatype`, `conversion`, `axis_descr`, `coeffs`) are `pub`
+- Structs with private `__block_info` fields can't be constructed with literal syntax — use `::new()` constructors
+- `load_from_string()` is available for testing with inline A2L content
 
 ## A2L Format Quick Reference
 

@@ -1,3 +1,3 @@
 fn main() {
-    println!("Hello, world!");
+    println!("a2ldeser - A2L file deserializer");
 }
