@@ -18,35 +18,51 @@ cargo fmt --check        # check formatting
 
 ## CLI Usage
 
-```sh
-# Extract a single characteristic by name
-a2ldeser <A2L_FILE> <HEX_FILE> <NAME>
+Three subcommands: `extract`, `decode`, and `list`.
 
-# List all characteristics (name + type)
-a2ldeser <A2L_FILE> <HEX_FILE> list
+```sh
+# Extract a characteristic from a HEX file
+a2ldeser extract <A2L> <HEX> <NAME>
+
+# Decode raw hex bytes using A2L metadata (measurement or characteristic)
+a2ldeser decode <A2L> <NAME> <RAW_BYTES>
+
+# List all characteristics and measurements
+a2ldeser list <A2L>
 ```
 
-Examples:
+### Extract examples (from HEX file)
 ```sh
-# Scalar value
-a2ldeser my.a2l my.hex g_xcp_enable_status
+a2ldeser extract my.a2l my.hex g_xcp_enable_status
 # → g_xcp_enable_status: 1  (raw: U32(1))
 
-# ASCII string
-a2ldeser my.a2l my.hex CalPartNumber
+a2ldeser extract my.a2l my.hex CalPartNumber
 # → CalPartNumber (ASCII): "P0425521 AT"
 
-# 1D curve
-a2ldeser my.a2l my.hex MyCurve
+a2ldeser extract my.a2l my.hex MyCurve
 # → MyCurve (CURVE, 10 points, unit: rpm)
 
-# 2D map
-a2ldeser my.a2l my.hex MyMap
+a2ldeser extract my.a2l my.hex MyMap
 # → MyMap (MAP, 8x8, unit: Nm)
 
-# 1D value block
-a2ldeser my.a2l my.hex MyArray
+a2ldeser extract my.a2l my.hex MyArray
 # → MyArray (VAL_BLK, 24 elements, unit: V)
+
+# List characteristics only
+a2ldeser extract my.a2l my.hex list
+```
+
+### Decode examples (from raw bytes)
+```sh
+# Decode a UINT16 measurement from raw bytes
+a2ldeser decode my.a2l engine_speed "0xffe6"
+# → engine_speed (MEASUREMENT, Uword): raw=U16(59135) → 59135 rpm
+
+# Decode a UINT32 characteristic from raw bytes
+a2ldeser decode my.a2l my_param "0x01000000"
+# → my_param (CHARACTERISTIC, Ulong): raw=U32(1) → 1
+
+# Hex bytes accept: "0xffe6", "ffe6", "ff e6"
 ```
 
 Uses `clap` for argument parsing. Pass `--help` for usage info.
