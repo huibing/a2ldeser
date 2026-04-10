@@ -1125,3 +1125,103 @@ fn hex_total_size_is_reasonable() {
     assert!(total > 100_000, "HEX should have >100KB of data, got {total}");
     assert!(total < 100_000_000, "HEX should have <100MB of data, got {total}");
 }
+
+// ========================================================================
+// Measurement Resolution Tests
+// ========================================================================
+
+#[test]
+fn resolve_all_measurements_succeeds() {
+    let m = module();
+    let r = Resolver::new(m);
+    let results = r.resolve_all_measurements();
+    assert_eq!(results.len(), m.measurement.len());
+    // Some may fail due to missing compu_methods, but resolution itself should not panic
+    let ok_count = results.iter().filter(|r| r.is_ok()).count();
+    assert!(ok_count > 0, "at least some measurements should resolve");
+}
+
+#[test]
+fn all_measurements_are_ram() {
+    let m = module();
+    let r = Resolver::new(m);
+    let results = r.resolve_all_measurements();
+    for result in &results {
+        if let Ok(meas) = result {
+            assert!(meas.is_ram(), "{} should be RAM", meas.name);
+        }
+    }
+}
+
+#[test]
+fn measurement_addresses_not_in_hex() {
+    let m = module();
+    let hex = sample_hex();
+    let r = Resolver::new(m);
+    // Measurements are RAM — their addresses should generally NOT be in the flash HEX.
+    // Check a representative sample.
+    let resolved: Vec<_> = r.resolve_all_measurements()
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .filter_map(|m| m.ecu_address.map(|addr| (m.name.clone(), addr)))
+        .take(100)
+        .collect();
+    let in_hex = resolved.iter()
+        .filter(|(_, addr)| hex.contains(*addr, 1))
+        .count();
+    // RAM addresses typically live in a different address space than flash
+    // Most should NOT be in the HEX file
+    let ratio = in_hex as f64 / resolved.len() as f64;
+    assert!(ratio < 0.5,
+        "expected most measurement addresses to be outside flash HEX, \
+         but {in_hex}/{} were found (ratio {ratio:.2})", resolved.len());
+}
+
+#[test]
+fn read_measurement_from_hex_returns_error() {
+    let m = module();
+    let hex = sample_hex();
+    let r = Resolver::new(m);
+    // Pick the first measurement with an address
+    let meas_name = m.measurement.iter()
+        .find(|meas| meas.ecu_address.is_some())
+        .map(|meas| meas.get_name().to_string())
+        .expect("sample should have measurements with ECU_ADDRESS");
+    let result = r.read_measurement_from_hex(&meas_name, hex);
+    assert!(matches!(result, Err(ResolveError::MeasurementIsRam { .. })),
+        "reading measurement from HEX should return MeasurementIsRam error");
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("RAM"), "error should mention RAM");
+}
+
+#[test]
+fn measurement_has_valid_datatypes() {
+    let m = module();
+    let r = Resolver::new(m);
+    let results = r.resolve_all_measurements();
+    for result in results.into_iter().flatten() {
+        // Verify datatype is a known variant (this is just a sanity check)
+        let size = A2lValue::datatype_size(&result.datatype);
+        assert!(size > 0, "measurement {} has zero-size datatype {:?}",
+            result.name, result.datatype);
+    }
+}
+
+#[test]
+fn measurement_conversion_refs_mostly_valid() {
+    let m = module();
+    let r = Resolver::new(m);
+    let cm_names: HashSet<_> = m.compu_method.iter()
+        .map(|cm| cm.get_name().to_string())
+        .collect();
+
+    let results = r.resolve_all_measurements();
+    let resolved: Vec<_> = results.into_iter().flatten().collect();
+    let valid = resolved.iter()
+        .filter(|m| m.conversion == "NO_COMPU_METHOD" || cm_names.contains(&m.conversion))
+        .count();
+    // We know 5 measurements reference the broken DMC_CM_uint32
+    let broken = resolved.len() - valid;
+    assert!(broken <= 5,
+        "at most 5 broken measurement→CM refs expected, got {broken}");
+}

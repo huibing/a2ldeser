@@ -1,13 +1,18 @@
 //! A2L object resolver — resolves cross-references in the A2L module to produce
-//! fully-resolved descriptions of CURVE, MAP, VALUE, and other characteristics.
+//! fully-resolved descriptions of CURVE, MAP, VALUE, MEASUREMENT, and other objects.
 //!
 //! This module walks the reference graph:
 //!   Characteristic → AxisDescr → AxisPts → CompuMethod → CompuVtab
 //!                  → RecordLayout
 //!                  → CompuMethod
+//!   Measurement → CompuMethod → CompuVtab
 //!
 //! It does NOT read binary data from HEX files. It resolves the *metadata*
 //! so that a binary reader knows exactly what to extract.
+//!
+//! **Important:** Measurements live in ECU RAM, not flash. Their addresses will
+//! NOT be present in a flash HEX file. Use `ResolvedMeasurement.is_ram()` and
+//! check before attempting HEX reads.
 
 use a2lfile::{
     A2lObjectName, AxisDescrAttribute, CharacteristicType, DataType, Module,
@@ -32,6 +37,12 @@ pub enum ResolveError {
     IncompleteAxis { characteristic: String, detail: String },
     /// A conversion error occurred during resolution.
     Conversion(crate::compu_method::ConversionError),
+    /// Attempted to read a measurement from flash (HEX) — measurements are RAM
+    /// variables and their values are only available at ECU runtime via XCP/CCP.
+    MeasurementIsRam {
+        name: String,
+        address: Option<u32>,
+    },
 }
 
 impl std::fmt::Display for ResolveError {
@@ -54,6 +65,16 @@ impl std::fmt::Display for ResolveError {
                 write!(f, "incomplete axis on '{characteristic}': {detail}")
             }
             ResolveError::Conversion(e) => write!(f, "conversion error: {e}"),
+            ResolveError::MeasurementIsRam { name, address } => {
+                write!(
+                    f,
+                    "measurement '{name}' is a RAM variable (address: {}) — \
+                     its value is only available at ECU runtime via XCP/CCP, not in flash HEX files",
+                    address
+                        .map(|a| format!("0x{a:08X}"))
+                        .unwrap_or_else(|| "none".to_string())
+                )
+            }
         }
     }
 }
@@ -148,6 +169,48 @@ pub struct ResolvedValue {
     pub conversion: String,
     pub unit: String,
     pub layout: ResolvedLayout,
+}
+
+/// Fully resolved MEASUREMENT (RAM variable) metadata.
+///
+/// Measurements are runtime variables stored in ECU RAM. Their addresses
+/// are NOT present in flash HEX files — values can only be read via live
+/// ECU communication (XCP/CCP protocol).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedMeasurement {
+    pub name: String,
+    pub long_identifier: String,
+    /// ECU RAM address (from ECU_ADDRESS), if specified.
+    pub ecu_address: Option<u32>,
+    /// Data type for interpreting raw bytes.
+    pub datatype: DataType,
+    /// COMPU_METHOD name for raw→physical conversion.
+    pub conversion: String,
+    /// Physical unit string (from the COMPU_METHOD).
+    pub unit: String,
+    /// Bit mask applied before conversion (if any).
+    pub bit_mask: Option<u64>,
+    /// Lower valid limit.
+    pub lower_limit: f64,
+    /// Upper valid limit.
+    pub upper_limit: f64,
+}
+
+impl ResolvedMeasurement {
+    /// Returns `true` — measurements are always RAM variables.
+    /// Their addresses are NOT in flash HEX files.
+    pub fn is_ram(&self) -> bool {
+        true
+    }
+
+    /// Convenience: returns a `MeasurementIsRam` error for use when
+    /// caller attempts to read this measurement from a HEX file.
+    pub fn hex_read_error(&self) -> ResolveError {
+        ResolveError::MeasurementIsRam {
+            name: self.name.clone(),
+            address: self.ecu_address,
+        }
+    }
 }
 
 /// Unified resolved characteristic.
@@ -396,6 +459,71 @@ impl<'a> Resolver<'a> {
             })
             .collect()
     }
+
+    // ====================================================================
+    // Measurement resolution
+    // ====================================================================
+
+    /// Resolve a measurement by name into its fully-resolved form.
+    ///
+    /// Measurements are RAM variables — their metadata (data type, conversion,
+    /// address) is resolved, but their values can only be read at ECU runtime.
+    pub fn resolve_measurement(
+        &self,
+        name: &str,
+    ) -> Result<ResolvedMeasurement, ResolveError> {
+        let meas = self
+            .module
+            .measurement
+            .iter()
+            .find(|m| m.get_name() == name)
+            .ok_or_else(|| ResolveError::NotFound {
+                kind: "Measurement",
+                name: name.to_string(),
+            })?;
+
+        let unit = self.lookup_unit(&meas.conversion);
+        let ecu_address = meas.ecu_address.as_ref().map(|ea| ea.address);
+        let bit_mask = meas.bit_mask.as_ref().map(|bm| bm.mask);
+
+        Ok(ResolvedMeasurement {
+            name: meas.get_name().to_string(),
+            long_identifier: meas.long_identifier.clone(),
+            ecu_address,
+            datatype: meas.datatype.clone(),
+            conversion: meas.conversion.clone(),
+            unit,
+            bit_mask,
+            lower_limit: meas.lower_limit,
+            upper_limit: meas.upper_limit,
+        })
+    }
+
+    /// Resolve all measurements in the module.
+    pub fn resolve_all_measurements(&self) -> Vec<Result<ResolvedMeasurement, ResolveError>> {
+        self.module
+            .measurement
+            .iter()
+            .map(|m| self.resolve_measurement(m.get_name()))
+            .collect()
+    }
+
+    /// List all measurements in the module.
+    pub fn list_measurements(&self) -> &a2lfile::ItemList<a2lfile::Measurement> {
+        &self.module.measurement
+    }
+
+    /// Attempt to read a measurement's value from a HEX file.
+    /// Always returns `Err(MeasurementIsRam)` because measurements are RAM
+    /// variables whose values are not stored in flash HEX files.
+    pub fn read_measurement_from_hex(
+        &self,
+        name: &str,
+        _hex: &crate::hex_reader::HexMemory,
+    ) -> Result<(), ResolveError> {
+        let resolved = self.resolve_measurement(name)?;
+        Err(resolved.hex_read_error())
+    }
 }
 
 // ========================================================================
@@ -425,6 +553,12 @@ mod tests {
                 /begin RECORD_LAYOUT rl_map
                   FNC_VALUES 1 FLOAT32_IEEE COLUMN_DIR DIRECT
                 /end RECORD_LAYOUT
+                /begin MEASUREMENT meas_rpm "Engine speed" UWORD cm_ratio 1 1.0 0 10000
+                  ECU_ADDRESS 0xD0001000
+                  BIT_MASK 0xFFFF
+                /end MEASUREMENT
+                /begin MEASUREMENT meas_noaddr "Temperature" FLOAT32_IEEE cm_identity 1 0.5 -40 150
+                /end MEASUREMENT
               /end MODULE
             /end PROJECT
         "#;
@@ -516,5 +650,103 @@ mod tests {
             actual: "Value".into(),
         };
         assert_eq!(format!("{e}"), "'bar' is Value, expected Curve");
+    }
+
+    #[test]
+    fn resolve_measurement_with_address() {
+        let a2l = minimal_module();
+        let r = Resolver::new(&a2l.project.module[0]);
+        let m = r.resolve_measurement("meas_rpm").unwrap();
+        assert_eq!(m.name, "meas_rpm");
+        assert_eq!(m.long_identifier, "Engine speed");
+        assert_eq!(m.ecu_address, Some(0xD0001000));
+        assert_eq!(m.datatype, DataType::Uword);
+        assert_eq!(m.conversion, "cm_ratio");
+        assert_eq!(m.unit, "rpm");
+        assert_eq!(m.bit_mask, Some(0xFFFF));
+        assert!((m.upper_limit - 10000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn resolve_measurement_without_address() {
+        let a2l = minimal_module();
+        let r = Resolver::new(&a2l.project.module[0]);
+        let m = r.resolve_measurement("meas_noaddr").unwrap();
+        assert_eq!(m.name, "meas_noaddr");
+        assert_eq!(m.ecu_address, None);
+        assert_eq!(m.datatype, DataType::Float32Ieee);
+        assert_eq!(m.conversion, "cm_identity");
+        assert_eq!(m.bit_mask, None);
+    }
+
+    #[test]
+    fn resolve_measurement_not_found() {
+        let a2l = minimal_module();
+        let r = Resolver::new(&a2l.project.module[0]);
+        let result = r.resolve_measurement("nonexistent");
+        assert!(matches!(
+            result,
+            Err(ResolveError::NotFound { kind: "Measurement", .. })
+        ));
+    }
+
+    #[test]
+    fn measurement_is_always_ram() {
+        let a2l = minimal_module();
+        let r = Resolver::new(&a2l.project.module[0]);
+        let m = r.resolve_measurement("meas_rpm").unwrap();
+        assert!(m.is_ram());
+    }
+
+    #[test]
+    fn measurement_hex_read_error() {
+        let a2l = minimal_module();
+        let r = Resolver::new(&a2l.project.module[0]);
+        let m = r.resolve_measurement("meas_rpm").unwrap();
+        let err = m.hex_read_error();
+        let msg = format!("{err}");
+        assert!(msg.contains("RAM variable"), "error should mention RAM: {msg}");
+        assert!(msg.contains("0xD0001000"), "error should show address: {msg}");
+        assert!(msg.contains("XCP"), "error should mention XCP: {msg}");
+    }
+
+    #[test]
+    fn resolve_all_measurements() {
+        let a2l = minimal_module();
+        let r = Resolver::new(&a2l.project.module[0]);
+        let all = r.resolve_all_measurements();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().all(|r| r.is_ok()));
+    }
+
+    #[test]
+    fn read_measurement_from_hex_always_errors() {
+        let a2l = minimal_module();
+        let r = Resolver::new(&a2l.project.module[0]);
+        let hex = crate::hex_reader::HexMemory::from_string("").unwrap();
+        let result = r.read_measurement_from_hex("meas_rpm", &hex);
+        assert!(matches!(
+            result,
+            Err(ResolveError::MeasurementIsRam { .. })
+        ));
+    }
+
+    #[test]
+    fn measurement_is_ram_error_display() {
+        let e = ResolveError::MeasurementIsRam {
+            name: "speed".into(),
+            address: Some(0xD0001000),
+        };
+        let msg = format!("{e}");
+        assert!(msg.contains("speed"));
+        assert!(msg.contains("RAM"));
+        assert!(msg.contains("0xD0001000"));
+
+        let e = ResolveError::MeasurementIsRam {
+            name: "temp".into(),
+            address: None,
+        };
+        let msg = format!("{e}");
+        assert!(msg.contains("none"));
     }
 }
