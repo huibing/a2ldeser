@@ -92,8 +92,9 @@ Files in `refs/` are large reference artifacts — do not modify or parse at bui
 | `src/compu_method.rs` | COMPU_METHOD conversions (IDENTICAL, LINEAR, RAT_FUNC, TAB_*, TAB_VERB) |
 | `src/resolver.rs` | Cross-reference resolver: Characteristic + Measurement → axes → layout → units |
 | `src/hex_reader.rs` | Intel HEX file reader: `HexMemory` memory image with address-based access |
+| `src/extractor.rs` | End-to-end pipeline: Resolver + HexMemory + A2lValue + CompuMethod → physical values |
 | `src/lib.rs` | Library root re-exporting all modules |
-| `tests/integration.rs` | Integration tests against the real sample A2L file |
+| `tests/integration.rs` | Integration tests against the real sample A2L and HEX files |
 
 ## Resolver Pattern
 
@@ -210,6 +211,50 @@ let bytes = hex.read_bytes(ch.address, 4)?;
 let raw_val = A2lValue::from_bytes(&bytes, DataType::Float32Ieee)?;
 let phys_val = convert_raw_to_physical(raw_val.as_f64()?, &a2l_file, &compu_method_name)?;
 ```
+
+### Extractor — End-to-End Pipeline (`src/extractor.rs`)
+
+The `Extractor` combines all modules into a single pipeline that reads fully-
+converted physical values from ECU flash data:
+
+```
+A2L metadata → Resolver → address + data type + layout
+                ↓
+HEX binary  → HexMemory → raw bytes at address
+                ↓
+              A2lValue  → typed raw value
+                ↓
+            CompuMethod → PhysicalValue (Numeric or Verbal)
+```
+
+```rust
+use a2ldeser::extractor::*;
+
+let ext = Extractor::new(module, &hex);
+
+// Scalar value
+let val = ext.extract_value("my_param")?;
+println!("{}: {:?} {} (raw: {:?})", val.name, val.physical, val.unit, val.raw);
+
+// 1D curve
+let curve = ext.extract_curve("my_curve")?;
+for (x, y) in curve.x_axis.iter().zip(curve.values.iter()) {
+    println!("  x={x} → y={y:?}");
+}
+
+// 2D map
+let map = ext.extract_map("my_map")?;
+println!("{}x{} map", map.x_axis.len(), map.y_axis.len());
+
+// Measurement — always fails (RAM, not in flash)
+let err = ext.extract_measurement("engine_speed").unwrap_err();
+// ExtractError::Resolve(MeasurementIsRam { ... })
+```
+
+**`PhysicalValue` enum:**
+- `PhysicalValue::Numeric(f64)` — from IDENTICAL, LINEAR, RAT_FUNC conversions
+- `PhysicalValue::Verbal(String)` — from TAB_VERB / COMPU_VTAB lookups
+- Use `.as_f64()` or `.as_str()` for type-safe access
 
 ## Critical Design Areas
 
