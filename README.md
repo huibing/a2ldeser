@@ -70,6 +70,19 @@ a2ldeser decode my.a2l engine_speed "0x1027"
 a2ldeser list <A2L_FILE>
 ```
 
+### Batch extraction with summary
+
+```sh
+a2ldeser summary <A2L_FILE> <HEX_FILE>
+# → Extraction complete: 10751 succeeded, 0 failed out of 10751 total
+# → Successes by type:
+# →   VALUE: 9374
+# →   CURVE: 355
+# →   MAP: 344
+# →   VAL_BLK: 673
+# →   ASCII: 5
+```
+
 ## Library API
 
 ### Extract values from HEX files
@@ -95,6 +108,13 @@ println!("X: {:?}, Y: {:?}", curve.x_axis, curve.values);
 let map = ext.extract_map("my_map").unwrap();
 let ascii = ext.extract_ascii("my_string").unwrap();
 let blk = ext.extract_val_blk("my_array").unwrap();
+
+// Auto-detect type
+let obj = ext.extract_any("some_name").unwrap();
+
+// Batch extract all with error recovery
+let report = ext.extract_all();
+report.print_summary();
 ```
 
 ### Decode raw bytes

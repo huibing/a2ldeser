@@ -18,7 +18,7 @@ cargo fmt --check        # check formatting
 
 ## CLI Usage
 
-Three subcommands: `extract`, `decode`, and `list`.
+Three subcommands: `extract`, `decode`, `list`, and `summary`.
 
 ```sh
 # Extract a characteristic from a HEX file
@@ -29,6 +29,9 @@ a2ldeser decode <A2L> <NAME> <RAW_BYTES>
 
 # List all characteristics and measurements
 a2ldeser list <A2L>
+
+# Batch-extract all characteristics and report success/failure summary
+a2ldeser summary <A2L> <HEX>
 ```
 
 ### Extract examples (from HEX file)
@@ -312,6 +315,24 @@ println!("{}: {} elements, unit={}", vb.name, vb.values.len(), vb.unit);
 let ascii = ext.extract_ascii("CalPartNumber")?;
 println!("{}: \"{}\"", ascii.name, ascii.text);
 
+// Auto-detect type and extract
+let obj = ext.extract_any("some_name")?;
+match obj {
+    ExtractedObject::Value(v) => println!("{}: {}", v.name, v.unit),
+    ExtractedObject::Curve(c) => println!("{}: {} points", c.name, c.x_axis.len()),
+    ExtractedObject::Map(m) => println!("{}: {}x{}", m.name, m.x_axis.len(), m.y_axis.len()),
+    ExtractedObject::ValBlk(b) => println!("{}: {} elements", b.name, b.values.len()),
+    ExtractedObject::Ascii(a) => println!("{}: {}", a.name, a.text),
+}
+
+// Batch extract all characteristics with error recovery
+let report = ext.extract_all();
+report.print_summary();
+println!("{} succeeded, {} failed", report.successes.len(), report.failures.len());
+for failure in &report.failures {
+    eprintln!("  {} ({}): {}", failure.name, failure.type_label, failure.error);
+}
+
 // Measurement — always fails (RAM, not in flash)
 let err = ext.extract_measurement("engine_speed").unwrap_err();
 // ExtractError::Resolve(MeasurementIsRam { ... })
@@ -330,6 +351,8 @@ let err = ext.extract_measurement("engine_speed").unwrap_err();
 | Curve (1D lookup) | `ExtractedCurve` | `x_axis`, `values`, `unit` |
 | Map (2D lookup) | `ExtractedMap` | `x_axis`, `y_axis`, `values[y][x]`, `unit` |
 | Ascii (string) | `ExtractedAscii` | `text` (NUL-stripped, UTF-8) |
+| Any (auto-detect) | `ExtractedObject` | enum wrapping all 5 types above |
+| Batch report | `ExtractionReport` | `successes`, `failures`, `print_summary()` |
 
 **Deposit direction (index_mode):**
 - `ResolvedLayout.index_mode` comes from `fnc_values.index_mode` in the record layout
