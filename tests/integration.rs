@@ -1764,3 +1764,127 @@ fn extraction_report_print_summary_does_not_panic() {
     let report = ext.extract_all();
     report.print_summary();
 }
+
+// ========================================================================
+// JSON serialization tests
+// ========================================================================
+
+#[test]
+fn json_extracted_value_roundtrip() {
+    let ext = extractor();
+    let val = ext.extract_value("g_xcp_enable_status").unwrap();
+    let json = serde_json::to_string(&val).expect("serialize value");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+    assert_eq!(parsed["name"], "g_xcp_enable_status");
+    assert!(parsed["raw"].is_object());
+    assert!(parsed["physical"].is_object());
+}
+
+#[test]
+fn json_extracted_curve_has_axes() {
+    let ext = extractor();
+    let m = module();
+    let name = m.characteristic.iter()
+        .find(|c| c.characteristic_type == CharacteristicType::Curve
+            && sample_hex().contains(c.address, 1))
+        .map(|c| c.get_name())
+        .expect("need a Curve");
+
+    let curve = ext.extract_curve(name).unwrap();
+    let json = serde_json::to_string_pretty(&curve).expect("serialize curve");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+    assert!(parsed["x_axis"].is_array());
+    assert!(parsed["values"].is_array());
+    assert_eq!(parsed["x_axis"].as_array().unwrap().len(), parsed["values"].as_array().unwrap().len());
+}
+
+#[test]
+fn json_extracted_map_has_2d_values() {
+    let ext = extractor();
+    let m = module();
+    let name = m.characteristic.iter()
+        .find(|c| c.characteristic_type == CharacteristicType::Map
+            && sample_hex().contains(c.address, 1))
+        .map(|c| c.get_name())
+        .expect("need a Map");
+
+    let map = ext.extract_map(name).unwrap();
+    let json = serde_json::to_string(&map).expect("serialize map");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+    assert!(parsed["x_axis"].is_array());
+    assert!(parsed["y_axis"].is_array());
+    assert!(parsed["values"].is_array());
+    let rows = parsed["values"].as_array().unwrap();
+    assert_eq!(rows.len(), parsed["y_axis"].as_array().unwrap().len());
+    assert_eq!(rows[0].as_array().unwrap().len(), parsed["x_axis"].as_array().unwrap().len());
+}
+
+#[test]
+fn json_extracted_valblk_has_array() {
+    let ext = extractor();
+    let m = module();
+    let name = m.characteristic.iter()
+        .find(|c| c.characteristic_type == CharacteristicType::ValBlk
+            && sample_hex().contains(c.address, 1))
+        .map(|c| c.get_name())
+        .expect("need a ValBlk");
+
+    let vb = ext.extract_val_blk(name).unwrap();
+    let json = serde_json::to_string(&vb).expect("serialize valblk");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+    assert!(parsed["values"].is_array());
+    assert!(parsed["values"].as_array().unwrap().len() > 1);
+}
+
+#[test]
+fn json_extracted_ascii_has_text() {
+    let ext = extractor();
+    let m = module();
+    let name = m.characteristic.iter()
+        .find(|c| c.characteristic_type == CharacteristicType::Ascii
+            && sample_hex().contains(c.address, 1))
+        .map(|c| c.get_name())
+        .expect("need an Ascii");
+
+    let ascii = ext.extract_ascii(name).unwrap();
+    let json = serde_json::to_string(&ascii).expect("serialize ascii");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+    assert!(parsed["text"].is_string());
+    assert!(!parsed["text"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn json_extracted_object_enum_tags_correctly() {
+    let ext = extractor();
+    let obj = ext.extract_any("g_xcp_enable_status").unwrap();
+    let json = serde_json::to_string(&obj).expect("serialize ExtractedObject");
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+    assert!(parsed["Value"].is_object(), "should be tagged as Value variant");
+}
+
+#[test]
+fn json_physical_value_numeric_format() {
+    let val = PhysicalValue::Numeric(42.5);
+    let json = serde_json::to_string(&val).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(parsed["Numeric"].is_number());
+    assert_eq!(parsed["Numeric"].as_f64().unwrap(), 42.5);
+}
+
+#[test]
+fn json_physical_value_verbal_format() {
+    let val = PhysicalValue::Verbal("ON".to_string());
+    let json = serde_json::to_string(&val).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed["Verbal"], "ON");
+}
+
+#[test]
+fn json_all_characteristics_serialize() {
+    let ext = extractor();
+    let report = ext.extract_all();
+    for obj in &report.successes {
+        serde_json::to_string(obj)
+            .unwrap_or_else(|e| panic!("failed to serialize {}: {e}", obj.name()));
+    }
+}
