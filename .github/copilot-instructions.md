@@ -16,6 +16,41 @@ cargo clippy             # lint
 cargo fmt --check        # check formatting
 ```
 
+## CLI Usage
+
+```sh
+# Extract a single characteristic by name
+a2ldeser <A2L_FILE> <HEX_FILE> <NAME>
+
+# List all characteristics (name + type)
+a2ldeser <A2L_FILE> <HEX_FILE> list
+```
+
+Examples:
+```sh
+# Scalar value
+a2ldeser my.a2l my.hex g_xcp_enable_status
+# → g_xcp_enable_status: 1  (raw: U32(1))
+
+# ASCII string
+a2ldeser my.a2l my.hex CalPartNumber
+# → CalPartNumber (ASCII): "P0425521 AT"
+
+# 1D curve
+a2ldeser my.a2l my.hex MyCurve
+# → MyCurve (CURVE, 10 points, unit: rpm)
+
+# 2D map
+a2ldeser my.a2l my.hex MyMap
+# → MyMap (MAP, 8x8, unit: Nm)
+
+# 1D value block
+a2ldeser my.a2l my.hex MyArray
+# → MyArray (VAL_BLK, 24 elements, unit: V)
+```
+
+Uses `clap` for argument parsing. Pass `--help` for usage info.
+
 ## Key Dependency: `a2lfile` Crate
 
 The `a2lfile` crate handles all A2L parsing. Core usage pattern:
@@ -88,6 +123,7 @@ Files in `refs/` are large reference artifacts — do not modify or parse at bui
 
 | Module | Purpose |
 |--------|---------|
+| `src/main.rs` | CLI entry point using `clap` — extract characteristics by name |
 | `src/types.rs` | `A2lValue` enum — all A2L data types with `from_bytes()`, `as_f64()` |
 | `src/compu_method.rs` | COMPU_METHOD conversions (IDENTICAL, LINEAR, RAT_FUNC, TAB_*, TAB_VERB) |
 | `src/resolver.rs` | Cross-reference resolver: Characteristic + Measurement → axes → layout → units |
