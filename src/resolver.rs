@@ -15,7 +15,7 @@
 //! check before attempting HEX reads.
 
 use a2lfile::{
-    A2lObjectName, AxisDescrAttribute, CharacteristicType, DataType, Module,
+    A2lObjectName, AxisDescrAttribute, CharacteristicType, DataType, IndexMode, Module,
 };
 
 // ========================================================================
@@ -133,6 +133,9 @@ pub struct ResolvedAxis {
 pub struct ResolvedLayout {
     pub name: String,
     pub fnc_values_datatype: Option<DataType>,
+    /// How multi-dimensional data is stored in memory.
+    /// `ColumnDir` = column-major, `RowDir` = row-major.
+    pub index_mode: Option<IndexMode>,
 }
 
 /// Fully resolved CURVE (1D lookup table) metadata.
@@ -323,6 +326,7 @@ impl<'a> Resolver<'a> {
         Ok(ResolvedLayout {
             name: rl.get_name().to_string(),
             fnc_values_datatype: rl.fnc_values.as_ref().map(|f| f.datatype.clone()),
+            index_mode: rl.fnc_values.as_ref().map(|f| f.index_mode.clone()),
         })
     }
 
@@ -634,6 +638,7 @@ mod tests {
         let layout = r.resolve_layout("rl_scalar").unwrap();
         assert_eq!(layout.name, "rl_scalar");
         assert_eq!(layout.fnc_values_datatype, Some(DataType::Float32Ieee));
+        assert_eq!(layout.index_mode, Some(IndexMode::ColumnDir));
     }
 
     #[test]

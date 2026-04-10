@@ -8,7 +8,7 @@
 //!
 //! Measurements are RAM variables and CANNOT be read from HEX files.
 
-use a2lfile::{A2lObjectName, DataType, Module};
+use a2lfile::{A2lObjectName, IndexMode, Module};
 
 use crate::compu_method::{self, ConversionError};
 use crate::hex_reader::{HexError, HexMemory};
@@ -34,6 +34,8 @@ pub enum ExtractError {
     NoFncValues { layout: String },
     /// AXIS_PTS record layout is missing axis_pts_x.
     NoAxisPtsX { layout: String },
+    /// Unsupported index mode (e.g., AlternateCurves).
+    UnsupportedIndexMode { layout: String, mode: String },
 }
 
 impl std::fmt::Display for ExtractError {
@@ -47,6 +49,9 @@ impl std::fmt::Display for ExtractError {
             }
             ExtractError::NoAxisPtsX { layout } => {
                 write!(f, "axis_pts layout '{layout}' has no axis_pts_x")
+            }
+            ExtractError::UnsupportedIndexMode { layout, mode } => {
+                write!(f, "unsupported index mode '{mode}' in layout '{layout}'")
             }
         }
     }
@@ -285,20 +290,33 @@ impl<'a> Extractor<'a> {
                 let total_size = x_count * y_count * elem_size;
                 let bytes = self.hex.read_bytes(m.address, total_size)?;
 
-                let mut values = Vec::with_capacity(y_count);
-                for y in 0..y_count {
-                    let mut row = Vec::with_capacity(x_count);
-                    for x in 0..x_count {
-                        let offset = (y * x_count + x) * elem_size;
-                        let raw = A2lValue::from_bytes(datatype, &bytes[offset..])
-                            .ok_or_else(|| ExtractError::Hex(HexError::AddressNotFound {
-                                address: m.address + offset as u32,
-                                length: elem_size,
-                            }))?;
-                        row.push(self.convert_value(&raw, &m.conversion)?);
+                let index_mode = m.layout.index_mode.as_ref()
+                    .unwrap_or(&IndexMode::RowDir);
+
+                let values = match index_mode {
+                    IndexMode::RowDir => {
+                        // Row-major: val[y][x] = byte[(y * x_count + x) * elem_size]
+                        self.read_2d_values(
+                            &bytes, datatype, elem_size,
+                            x_count, y_count, &m.conversion,
+                            |x, y| (y * x_count + x) * elem_size,
+                        )?
                     }
-                    values.push(row);
-                }
+                    IndexMode::ColumnDir => {
+                        // Column-major: val[y][x] = byte[(x * y_count + y) * elem_size]
+                        self.read_2d_values(
+                            &bytes, datatype, elem_size,
+                            x_count, y_count, &m.conversion,
+                            |x, y| (x * y_count + y) * elem_size,
+                        )?
+                    }
+                    other => {
+                        return Err(ExtractError::UnsupportedIndexMode {
+                            layout: m.layout.name.clone(),
+                            mode: format!("{other:?}"),
+                        });
+                    }
+                };
 
                 Ok(ExtractedMap {
                     name: m.name,
@@ -335,6 +353,34 @@ impl<'a> Extractor<'a> {
     // ====================================================================
     // Internal helpers
     // ====================================================================
+
+    /// Read a 2D grid of values from flat bytes using a custom offset function.
+    fn read_2d_values(
+        &self,
+        bytes: &[u8],
+        datatype: &a2lfile::DataType,
+        elem_size: usize,
+        x_count: usize,
+        y_count: usize,
+        conversion: &str,
+        offset_fn: impl Fn(usize, usize) -> usize,
+    ) -> Result<Vec<Vec<PhysicalValue>>, ExtractError> {
+        let mut values = Vec::with_capacity(y_count);
+        for y in 0..y_count {
+            let mut row = Vec::with_capacity(x_count);
+            for x in 0..x_count {
+                let offset = offset_fn(x, y);
+                let raw = A2lValue::from_bytes(datatype, &bytes[offset..])
+                    .ok_or_else(|| ExtractError::Hex(HexError::AddressNotFound {
+                        address: offset as u32,
+                        length: elem_size,
+                    }))?;
+                row.push(self.convert_value(&raw, conversion)?);
+            }
+            values.push(row);
+        }
+        Ok(values)
+    }
 
     /// Convert a raw A2lValue using the named COMPU_METHOD.
     fn convert_value(
@@ -505,5 +551,53 @@ mod tests {
         };
         let ee: ExtractError = he.into();
         assert!(format!("{ee}").contains("1000"));
+    }
+
+    #[test]
+    fn unsupported_index_mode_error() {
+        let e = ExtractError::UnsupportedIndexMode {
+            layout: "rl_test".into(),
+            mode: "AlternateCurves".into(),
+        };
+        let msg = format!("{e}");
+        assert!(msg.contains("AlternateCurves"));
+        assert!(msg.contains("rl_test"));
+    }
+
+    #[test]
+    fn row_dir_offset_calculation() {
+        // 3x2 map (3 columns, 2 rows), 4 bytes each
+        let x_count = 3;
+        let y_count = 2;
+        let elem_size = 4;
+        let row_dir = |x: usize, y: usize| (y * x_count + x) * elem_size;
+
+        // Row 0: [0, 4, 8]
+        assert_eq!(row_dir(0, 0), 0);
+        assert_eq!(row_dir(1, 0), 4);
+        assert_eq!(row_dir(2, 0), 8);
+        // Row 1: [12, 16, 20]
+        assert_eq!(row_dir(0, 1), 12);
+        assert_eq!(row_dir(1, 1), 16);
+        assert_eq!(row_dir(2, 1), 20);
+    }
+
+    #[test]
+    fn column_dir_offset_calculation() {
+        // 3x2 map (3 columns, 2 rows), 4 bytes each
+        let x_count = 3;
+        let y_count = 2;
+        let elem_size = 4;
+        let col_dir = |x: usize, y: usize| (x * y_count + y) * elem_size;
+
+        // Col 0: y=0 at 0, y=1 at 4
+        assert_eq!(col_dir(0, 0), 0);
+        assert_eq!(col_dir(0, 1), 4);
+        // Col 1: y=0 at 8, y=1 at 12
+        assert_eq!(col_dir(1, 0), 8);
+        assert_eq!(col_dir(1, 1), 12);
+        // Col 2: y=0 at 16, y=1 at 20
+        assert_eq!(col_dir(2, 0), 16);
+        assert_eq!(col_dir(2, 1), 20);
     }
 }

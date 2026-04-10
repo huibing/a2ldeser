@@ -1434,3 +1434,48 @@ fn extract_nonexistent_characteristic() {
     let result = ext.extract_value("totally_fake_name_12345");
     assert!(matches!(result, Err(ExtractError::Resolve(ResolveError::NotFound { .. }))));
 }
+
+#[test]
+fn all_map_layouts_use_column_dir() {
+    // Verify our sample uses COLUMN_DIR for all MAPs (known from exploration)
+    let m = module();
+    let r = Resolver::new(m);
+    for ch in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Map)
+    {
+        if let Ok(ResolvedCharacteristic::Map(map)) = r.resolve_characteristic(ch.get_name()) {
+            assert_eq!(
+                map.layout.index_mode,
+                Some(a2lfile::IndexMode::ColumnDir),
+                "MAP {} should use ColumnDir", ch.get_name()
+            );
+        }
+    }
+}
+
+#[test]
+fn map_column_dir_dimensions_consistent() {
+    let ext = extractor();
+    let m = module();
+    // Extract several maps and verify dimensions are consistent
+    let mut extracted = 0;
+    for ch in m.characteristic.iter()
+        .filter(|c| c.characteristic_type == CharacteristicType::Map)
+        .filter(|c| sample_hex().contains(c.address, 1))
+        .take(20)
+    {
+        match ext.extract_map(ch.get_name()) {
+            Ok(em) => {
+                assert_eq!(em.values.len(), em.y_axis.len(),
+                    "{}: row count {} != y_axis len {}", em.name, em.values.len(), em.y_axis.len());
+                for (i, row) in em.values.iter().enumerate() {
+                    assert_eq!(row.len(), em.x_axis.len(),
+                        "{}: row[{i}] len {} != x_axis len {}", em.name, row.len(), em.x_axis.len());
+                }
+                extracted += 1;
+            }
+            Err(_) => {} // skip failures
+        }
+    }
+    assert!(extracted > 0, "should extract at least one MAP");
+}
