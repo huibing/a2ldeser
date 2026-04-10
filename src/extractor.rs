@@ -82,7 +82,7 @@ impl From<ConversionError> for ExtractError {
 // ========================================================================
 
 /// A physical value that may be numeric or verbal (string).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum PhysicalValue {
     /// Numeric physical value (from IDENTICAL, LINEAR, RAT_FUNC, etc.).
     Numeric(f64),
@@ -109,7 +109,7 @@ impl PhysicalValue {
 }
 
 /// Extracted scalar VALUE characteristic.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ExtractedValue {
     pub name: String,
     pub raw: A2lValue,
@@ -118,7 +118,7 @@ pub struct ExtractedValue {
 }
 
 /// Extracted CURVE (1D lookup table) characteristic.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ExtractedCurve {
     pub name: String,
     /// X axis breakpoints (physical values).
@@ -130,7 +130,7 @@ pub struct ExtractedCurve {
 }
 
 /// Extracted MAP (2D lookup table) characteristic.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ExtractedMap {
     pub name: String,
     /// X axis breakpoints (physical values).
@@ -145,7 +145,7 @@ pub struct ExtractedMap {
 }
 
 /// Extracted VAL_BLK (1D array of calibration values) characteristic.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ExtractedValBlk {
     pub name: String,
     /// Converted physical values.
@@ -154,7 +154,7 @@ pub struct ExtractedValBlk {
 }
 
 /// Extracted ASCII (string) characteristic.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ExtractedAscii {
     pub name: String,
     /// Decoded string (UTF-8, trailing NULs stripped).
@@ -607,7 +607,7 @@ impl<'a> Extractor<'a> {
 // ========================================================================
 
 /// Result of extracting a single characteristic (any type).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum ExtractedObject {
     Value(ExtractedValue),
     Curve(ExtractedCurve),

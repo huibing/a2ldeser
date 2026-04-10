@@ -1,6 +1,6 @@
 /// Comprehensive value type enum covering all possible A2L data types.
 /// Preserves type fidelity from the A2L RECORD_LAYOUT and DataType definitions.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum A2lValue {
     U8(u8),
     I8(i8),

@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use a2lfile::A2lObjectName;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use serde_json::json;
 
 use a2ldeser::compu_method;
 use a2ldeser::extractor::{ExtractedObject, Extractor, PhysicalValue};
@@ -14,8 +15,18 @@ use a2ldeser::types::A2lValue;
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
+    /// Output format
+    #[arg(long, value_enum, default_value_t = Format::Text, global = true)]
+    format: Format,
+
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Format {
+    Text,
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -54,12 +65,13 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
+    let fmt = cli.format;
 
     match cli.command {
-        Command::Extract { a2l, hex, name } => cmd_extract(&a2l, &hex, &name),
-        Command::Decode { a2l, name, raw } => cmd_decode(&a2l, &name, &raw),
-        Command::List { a2l } => cmd_list(&a2l),
-        Command::Summary { a2l, hex } => cmd_summary(&a2l, &hex),
+        Command::Extract { a2l, hex, name } => cmd_extract(&a2l, &hex, &name, fmt),
+        Command::Decode { a2l, name, raw } => cmd_decode(&a2l, &name, &raw, fmt),
+        Command::List { a2l } => cmd_list(&a2l, fmt),
+        Command::Summary { a2l, hex } => cmd_summary(&a2l, &hex, fmt),
     }
 }
 
@@ -92,13 +104,30 @@ fn parse_hex_bytes(s: &str) -> Vec<u8> {
         .collect()
 }
 
-fn cmd_extract(a2l_path: &Path, hex_path: &Path, name: &str) {
+// ========================================================================
+// extract subcommand
+// ========================================================================
+
+fn cmd_extract(a2l_path: &Path, hex_path: &Path, name: &str, fmt: Format) {
     let a2l = load_a2l(a2l_path);
     let module = &a2l.project.module[0];
 
     if name == "list" {
-        for ch in module.characteristic.iter() {
-            println!("{}\t{:?}", ch.get_name(), ch.characteristic_type);
+        let items: Vec<_> = module.characteristic.iter()
+            .map(|ch| (ch.get_name().to_string(), format!("{:?}", ch.characteristic_type)))
+            .collect();
+        match fmt {
+            Format::Text => {
+                for (n, t) in &items {
+                    println!("{n}\t{t}");
+                }
+            }
+            Format::Json => {
+                let arr: Vec<_> = items.iter()
+                    .map(|(n, t)| json!({"name": n, "type": t}))
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&arr).unwrap());
+            }
         }
         return;
     }
@@ -111,7 +140,7 @@ fn cmd_extract(a2l_path: &Path, hex_path: &Path, name: &str) {
     let ext = Extractor::new(module, &hex);
 
     match ext.extract_any(name) {
-        Ok(obj) => print_extracted(&obj),
+        Ok(obj) => output_extracted(&obj, fmt),
         Err(e) => {
             eprintln!("Error extracting '{name}': {e}");
             process::exit(1);
@@ -119,7 +148,11 @@ fn cmd_extract(a2l_path: &Path, hex_path: &Path, name: &str) {
     }
 }
 
-fn cmd_decode(a2l_path: &Path, name: &str, raw_hex: &str) {
+// ========================================================================
+// decode subcommand
+// ========================================================================
+
+fn cmd_decode(a2l_path: &Path, name: &str, raw_hex: &str, fmt: Format) {
     let a2l = load_a2l(a2l_path);
     let module = &a2l.project.module[0];
     let resolver = Resolver::new(module);
@@ -138,14 +171,27 @@ fn cmd_decode(a2l_path: &Path, name: &str, raw_hex: &str) {
         });
 
         let physical = decode_value(&raw, &meas.conversion, module);
-        println!("{} (MEASUREMENT, {:?}): raw={:?} → {} {}",
-            meas.name, meas.datatype, raw, fmt_phys(&physical), meas.unit);
+        match fmt {
+            Format::Text => {
+                println!("{} (MEASUREMENT, {:?}): raw={:?} → {} {}",
+                    meas.name, meas.datatype, raw, fmt_phys(&physical), meas.unit);
+            }
+            Format::Json => {
+                println!("{}", serde_json::to_string_pretty(&json!({
+                    "name": meas.name,
+                    "kind": "MEASUREMENT",
+                    "datatype": format!("{:?}", meas.datatype),
+                    "raw": raw,
+                    "physical": physical,
+                    "unit": meas.unit,
+                })).unwrap());
+            }
+        }
         return;
     }
 
     // Try as characteristic
     if let Ok(resolved) = resolver.resolve_characteristic(name) {
-        // Get data type from the resolved characteristic
         let (datatype, conversion, unit) = match &resolved {
             ResolvedCharacteristic::Value(v) => {
                 let dt = v.layout.fnc_values_datatype.as_ref().unwrap_or_else(|| {
@@ -176,10 +222,18 @@ fn cmd_decode(a2l_path: &Path, name: &str, raw_hex: &str) {
                 (*dt, m.conversion.clone(), m.unit.clone())
             }
             ResolvedCharacteristic::Ascii(_) => {
-                // For ASCII, just display the bytes as a string
                 let end = bytes.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
-                let text = String::from_utf8_lossy(&bytes[..end]);
-                println!("{name} (ASCII): \"{text}\"");
+                let text = String::from_utf8_lossy(&bytes[..end]).to_string();
+                match fmt {
+                    Format::Text => println!("{name} (ASCII): \"{text}\""),
+                    Format::Json => {
+                        println!("{}", serde_json::to_string_pretty(&json!({
+                            "name": name,
+                            "kind": "ASCII",
+                            "text": text,
+                        })).unwrap());
+                    }
+                }
                 return;
             }
         };
@@ -195,8 +249,22 @@ fn cmd_decode(a2l_path: &Path, name: &str, raw_hex: &str) {
         });
 
         let physical = decode_value(&raw, &conversion, module);
-        println!("{name} (CHARACTERISTIC, {:?}): raw={:?} → {} {}",
-            datatype, raw, fmt_phys(&physical), unit);
+        match fmt {
+            Format::Text => {
+                println!("{name} (CHARACTERISTIC, {:?}): raw={:?} → {} {}",
+                    datatype, raw, fmt_phys(&physical), unit);
+            }
+            Format::Json => {
+                println!("{}", serde_json::to_string_pretty(&json!({
+                    "name": name,
+                    "kind": "CHARACTERISTIC",
+                    "datatype": format!("{:?}", datatype),
+                    "raw": raw,
+                    "physical": physical,
+                    "unit": unit,
+                })).unwrap());
+            }
+        }
         return;
     }
 
@@ -204,20 +272,89 @@ fn cmd_decode(a2l_path: &Path, name: &str, raw_hex: &str) {
     process::exit(1);
 }
 
-fn cmd_list(a2l_path: &Path) {
+// ========================================================================
+// list subcommand
+// ========================================================================
+
+fn cmd_list(a2l_path: &Path, fmt: Format) {
     let a2l = load_a2l(a2l_path);
     let module = &a2l.project.module[0];
 
-    println!("=== Characteristics ({}) ===", module.characteristic.len());
-    for ch in module.characteristic.iter() {
-        println!("  {}\t{:?}", ch.get_name(), ch.characteristic_type);
-    }
-
-    println!("\n=== Measurements ({}) ===", module.measurement.len());
-    for meas in module.measurement.iter() {
-        println!("  {}\t{:?}", meas.get_name(), meas.datatype);
+    match fmt {
+        Format::Text => {
+            println!("=== Characteristics ({}) ===", module.characteristic.len());
+            for ch in module.characteristic.iter() {
+                println!("  {}\t{:?}", ch.get_name(), ch.characteristic_type);
+            }
+            println!("\n=== Measurements ({}) ===", module.measurement.len());
+            for meas in module.measurement.iter() {
+                println!("  {}\t{:?}", meas.get_name(), meas.datatype);
+            }
+        }
+        Format::Json => {
+            let chars: Vec<_> = module.characteristic.iter()
+                .map(|ch| json!({
+                    "name": ch.get_name(),
+                    "type": format!("{:?}", ch.characteristic_type),
+                }))
+                .collect();
+            let meas: Vec<_> = module.measurement.iter()
+                .map(|m| json!({
+                    "name": m.get_name(),
+                    "datatype": format!("{:?}", m.datatype),
+                }))
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&json!({
+                "characteristics": chars,
+                "measurements": meas,
+            })).unwrap());
+        }
     }
 }
+
+// ========================================================================
+// summary subcommand
+// ========================================================================
+
+fn cmd_summary(a2l_path: &Path, hex_path: &Path, fmt: Format) {
+    let a2l = load_a2l(a2l_path);
+    let module = &a2l.project.module[0];
+
+    let hex = HexMemory::from_file(hex_path).unwrap_or_else(|e| {
+        eprintln!("Error loading HEX file: {e}");
+        process::exit(1);
+    });
+
+    let ext = Extractor::new(module, &hex);
+    let report = ext.extract_all();
+
+    match fmt {
+        Format::Text => report.print_summary(),
+        Format::Json => {
+            let success_counts = report.success_counts();
+            let failure_counts = report.failure_counts();
+            let failures: Vec<_> = report.failures.iter()
+                .map(|f| json!({
+                    "name": f.name,
+                    "type": f.type_label,
+                    "error": f.error.to_string(),
+                }))
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&json!({
+                "total": report.total(),
+                "succeeded": report.successes.len(),
+                "failed": report.failures.len(),
+                "success_counts": success_counts,
+                "failure_counts": failure_counts,
+                "failures": failures,
+            })).unwrap());
+        }
+    }
+}
+
+// ========================================================================
+// helpers
+// ========================================================================
 
 fn decode_value(raw: &A2lValue, conversion: &str, module: &a2lfile::Module) -> PhysicalValue {
     // Try verbal first
@@ -241,7 +378,16 @@ fn fmt_phys(v: &PhysicalValue) -> String {
     }
 }
 
-fn print_extracted(obj: &ExtractedObject) {
+fn output_extracted(obj: &ExtractedObject, fmt: Format) {
+    match fmt {
+        Format::Json => {
+            println!("{}", serde_json::to_string_pretty(obj).unwrap());
+        }
+        Format::Text => print_extracted_text(obj),
+    }
+}
+
+fn print_extracted_text(obj: &ExtractedObject) {
     match obj {
         ExtractedObject::Value(val) => {
             println!("{}: {} {} (raw: {:?})", val.name, fmt_phys(&val.physical), val.unit, val.raw);
@@ -269,18 +415,4 @@ fn print_extracted(obj: &ExtractedObject) {
             println!("{} (ASCII): \"{}\"", ascii.name, ascii.text);
         }
     }
-}
-
-fn cmd_summary(a2l_path: &Path, hex_path: &Path) {
-    let a2l = load_a2l(a2l_path);
-    let module = &a2l.project.module[0];
-
-    let hex = HexMemory::from_file(hex_path).unwrap_or_else(|e| {
-        eprintln!("Error loading HEX file: {e}");
-        process::exit(1);
-    });
-
-    let ext = Extractor::new(module, &hex);
-    let report = ext.extract_all();
-    report.print_summary();
 }
