@@ -90,7 +90,7 @@ Files in `refs/` are large reference artifacts — do not modify or parse at bui
 |--------|---------|
 | `src/types.rs` | `A2lValue` enum — all A2L data types with `from_bytes()`, `as_f64()` |
 | `src/compu_method.rs` | COMPU_METHOD conversions (IDENTICAL, LINEAR, RAT_FUNC, TAB_*, TAB_VERB) |
-| `src/resolver.rs` | Cross-reference resolver: Characteristic → axes → layout → units |
+| `src/resolver.rs` | Cross-reference resolver: Characteristic + Measurement → axes → layout → units |
 | `src/hex_reader.rs` | Intel HEX file reader: `HexMemory` memory image with address-based access |
 | `src/lib.rs` | Library root re-exporting all modules |
 | `tests/integration.rs` | Integration tests against the real sample A2L file |
@@ -124,6 +124,36 @@ match resolver.resolve_characteristic("my_curve")? {
 let curves = resolver.resolve_all_curves();  // Vec<Result<ResolvedCurve, _>>
 let maps = resolver.resolve_all_maps();      // Vec<Result<ResolvedMap, _>>
 ```
+
+### Measurement Resolution (RAM Variables)
+
+Measurements are **RAM variables** — they live in ECU memory at runtime and are
+**NOT present in flash HEX files**. The resolver resolves their metadata
+(address, data type, conversion, unit) but prevents HEX reads with a clear error.
+
+```rust
+// Resolve measurement metadata
+let meas = resolver.resolve_measurement("engine_speed")?;
+println!("{}: {} @ {:?}", meas.name, meas.unit, meas.ecu_address);
+assert!(meas.is_ram());  // always true
+
+// Attempting to read from HEX always fails
+let result = resolver.read_measurement_from_hex("engine_speed", &hex);
+// Err(MeasurementIsRam { name: "engine_speed", address: Some(0xD0001000) })
+// "measurement 'engine_speed' is a RAM variable ... not in flash HEX files"
+
+// Bulk resolve
+let all_meas = resolver.resolve_all_measurements();
+```
+
+**Measurement vs Characteristic:**
+| | Characteristic | Measurement |
+|---|---|---|
+| Memory | Flash (calibration) | RAM (runtime) |
+| In HEX file | ✅ Yes | ❌ No |
+| Writable | Via flash tool | ECU writes at runtime |
+| Access | HEX read or XCP | XCP/CCP only |
+| Resolver type | `ResolvedCharacteristic` | `ResolvedMeasurement` |
 
 **Axis resolution chain:**
 - `FixAxisPar` → computed values: `offset + shift * i` for `i in 0..count`
