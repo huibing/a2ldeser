@@ -464,6 +464,11 @@ fn write_csv(w: &mut impl Write, objects: &[ExtractedObject]) -> std::io::Result
             ExtractedObject::Ascii(ascii) => {
                 writeln!(w, "{},ASCII,,,{},", csv_escape(&ascii.name), csv_escape(&ascii.text))?;
             }
+            ExtractedObject::AxisPts(ap) => {
+                for (i, v) in ap.values.iter().enumerate() {
+                    writeln!(w, "{},AXIS_PTS,{},,{},{}", csv_escape(&ap.name), i, v, csv_escape(&ap.unit))?;
+                }
+            }
         }
     }
     Ok(())
@@ -581,6 +586,10 @@ fn print_extracted_text(obj: &ExtractedObject) {
         }
         ExtractedObject::Ascii(ascii) => {
             println!("{} (ASCII): \"{}\"", ascii.name, ascii.text);
+        }
+        ExtractedObject::AxisPts(ap) => {
+            println!("{} (AXIS_PTS, {} points, unit: {})", ap.name, ap.values.len(), ap.unit);
+            println!("  {:?}", ap.values);
         }
     }
 }

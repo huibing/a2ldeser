@@ -162,6 +162,15 @@ pub struct ExtractedAscii {
     pub text: String,
 }
 
+/// Extracted AXIS_PTS (standalone calibratable axis breakpoints).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ExtractedAxisPts {
+    pub name: String,
+    /// Axis breakpoint values (physical).
+    pub values: Vec<f64>,
+    pub unit: String,
+}
+
 // ========================================================================
 // Extractor
 // ========================================================================
@@ -601,6 +610,52 @@ impl<'a> Extractor<'a> {
             })
             .collect()
     }
+
+    // ====================================================================
+    // AXIS_PTS extraction
+    // ====================================================================
+
+    /// Extract a standalone AXIS_PTS object by name.
+    ///
+    /// AXIS_PTS are calibratable breakpoint arrays referenced by CURVEs/MAPs
+    /// via COM_AXIS. They are separate calibration objects stored in flash.
+    pub fn extract_axis_pts(&self, name: &str) -> Result<ExtractedAxisPts, ExtractError> {
+        let ap = self
+            .module
+            .axis_pts
+            .iter()
+            .find(|a| a.get_name() == name)
+            .ok_or_else(|| {
+                ExtractError::Resolve(ResolveError::NotFound {
+                    kind: "AxisPts",
+                    name: name.to_string(),
+                })
+            })?;
+
+        let deposit_name = &ap.deposit_record;
+        let count = ap.max_axis_points as usize;
+        let address = ap.address;
+
+        let raw_values = self.read_axis_pts_data(address, deposit_name, count)?;
+
+        let conversion = &ap.conversion;
+        let values = self.convert_axis_values(&raw_values, conversion)?;
+
+        // Resolve unit from COMPU_METHOD
+        let unit = self
+            .module
+            .compu_method
+            .iter()
+            .find(|cm| cm.get_name() == conversion)
+            .map(|cm| cm.unit.clone())
+            .unwrap_or_default();
+
+        Ok(ExtractedAxisPts {
+            name: ap.get_name().to_string(),
+            values,
+            unit,
+        })
+    }
 }
 
 // ========================================================================
@@ -615,6 +670,7 @@ pub enum ExtractedObject {
     Map(ExtractedMap),
     ValBlk(ExtractedValBlk),
     Ascii(ExtractedAscii),
+    AxisPts(ExtractedAxisPts),
 }
 
 impl ExtractedObject {
@@ -626,6 +682,7 @@ impl ExtractedObject {
             ExtractedObject::Map(m) => &m.name,
             ExtractedObject::ValBlk(b) => &b.name,
             ExtractedObject::Ascii(a) => &a.name,
+            ExtractedObject::AxisPts(ap) => &ap.name,
         }
     }
 
@@ -637,6 +694,7 @@ impl ExtractedObject {
             ExtractedObject::Map(_) => "MAP",
             ExtractedObject::ValBlk(_) => "VAL_BLK",
             ExtractedObject::Ascii(_) => "ASCII",
+            ExtractedObject::AxisPts(_) => "AXIS_PTS",
         }
     }
 }
@@ -689,7 +747,7 @@ impl ExtractionReport {
         if ok > 0 {
             println!("\nSuccesses by type:");
             let counts = self.success_counts();
-            for label in &["VALUE", "CURVE", "MAP", "VAL_BLK", "ASCII"] {
+            for label in &["VALUE", "CURVE", "MAP", "VAL_BLK", "ASCII", "AXIS_PTS"] {
                 if let Some(&n) = counts.get(label) {
                     println!("  {label}: {n}");
                 }
@@ -717,7 +775,8 @@ impl ExtractionReport {
 }
 
 impl<'a> Extractor<'a> {
-    /// Extract all characteristics in the module, recovering from per-object errors.
+    /// Extract all characteristics and AXIS_PTS in the module, recovering from
+    /// per-object errors.
     ///
     /// Objects whose addresses are not present in the HEX data (e.g., outside the
     /// flash region) are recorded as failures rather than aborting the entire run.
@@ -761,30 +820,50 @@ impl<'a> Extractor<'a> {
             }
         }
 
+        // Also extract standalone AXIS_PTS (calibratable axis breakpoints)
+        for ap in self.module.axis_pts.iter() {
+            let name = ap.get_name().to_string();
+            match self.extract_axis_pts(&name) {
+                Ok(obj) => successes.push(ExtractedObject::AxisPts(obj)),
+                Err(e) => failures.push(ExtractionFailure {
+                    name,
+                    type_label: "AxisPts".to_string(),
+                    error: e,
+                }),
+            }
+        }
+
         ExtractionReport {
             successes,
             failures,
         }
     }
 
-    /// Extract a single characteristic by name, auto-detecting its type.
+    /// Extract a single object by name, auto-detecting its type.
+    ///
+    /// Tries characteristics first, then falls back to AXIS_PTS.
     pub fn extract_any(&self, name: &str) -> Result<ExtractedObject, ExtractError> {
-        let resolved = self.resolver.resolve_characteristic(name)?;
-        match resolved {
-            ResolvedCharacteristic::Value(_) => {
-                self.extract_value(name).map(ExtractedObject::Value)
-            }
-            ResolvedCharacteristic::Curve(_) => {
-                self.extract_curve(name).map(ExtractedObject::Curve)
-            }
-            ResolvedCharacteristic::Map(_) => {
-                self.extract_map(name).map(ExtractedObject::Map)
-            }
-            ResolvedCharacteristic::ValBlk(_) => {
-                self.extract_val_blk(name).map(ExtractedObject::ValBlk)
-            }
-            ResolvedCharacteristic::Ascii(_) => {
-                self.extract_ascii(name).map(ExtractedObject::Ascii)
+        match self.resolver.resolve_characteristic(name) {
+            Ok(resolved) => match resolved {
+                ResolvedCharacteristic::Value(_) => {
+                    self.extract_value(name).map(ExtractedObject::Value)
+                }
+                ResolvedCharacteristic::Curve(_) => {
+                    self.extract_curve(name).map(ExtractedObject::Curve)
+                }
+                ResolvedCharacteristic::Map(_) => {
+                    self.extract_map(name).map(ExtractedObject::Map)
+                }
+                ResolvedCharacteristic::ValBlk(_) => {
+                    self.extract_val_blk(name).map(ExtractedObject::ValBlk)
+                }
+                ResolvedCharacteristic::Ascii(_) => {
+                    self.extract_ascii(name).map(ExtractedObject::Ascii)
+                }
+            },
+            Err(_) => {
+                // Not a characteristic — try AXIS_PTS
+                self.extract_axis_pts(name).map(ExtractedObject::AxisPts)
             }
         }
     }
