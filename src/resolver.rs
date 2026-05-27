@@ -94,10 +94,16 @@ impl From<crate::compu_method::ConversionError> for ResolveError {
 /// Describes how an axis's breakpoints are defined.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AxisSource {
-    /// FIX_AXIS_PAR: computed from offset + shift * index.
+    /// FIX_AXIS_PAR: computed from offset + (i-1) * 2^shift, 1-indexed.
     FixAxisPar {
         offset: f64,
         shift: f64,
+        count: u16,
+    },
+    /// FIX_AXIS_PAR_DIST: computed from offset + (i-1) * distance, 1-indexed.
+    FixAxisParDist {
+        offset: f64,
+        distance: f64,
         count: u16,
     },
     /// FIX_AXIS_PAR_LIST: explicit list of breakpoints in the A2L file.
@@ -414,6 +420,15 @@ impl<'a> Resolver<'a> {
             });
         }
 
+        // Check for FIX_AXIS_PAR_DIST
+        if let Some(ref fapd) = ad.fix_axis_par_dist {
+            return Ok(AxisSource::FixAxisParDist {
+                offset: fapd.offset,
+                distance: fapd.distance,
+                count: fapd.number_apo,
+            });
+        }
+
         // Check for COM_AXIS (axis_pts_ref present)
         if let Some(ref apr) = ad.axis_pts_ref {
             let ap = self
@@ -442,10 +457,18 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    /// Compute FixAxisPar breakpoint values: value[i] = offset + shift * i.
+    /// Compute FixAxisPar breakpoint values: xi = offset + (i-1) * 2^shift, 1 <= i <= count.
     pub fn compute_fix_axis_par_values(offset: f64, shift: f64, count: u16) -> Vec<f64> {
-        (0..count)
-            .map(|i| offset + shift * i as f64)
+        let step = 2.0_f64.powf(shift);
+        (1..=count)
+            .map(|i| offset + (i as f64 - 1.0) * step)
+            .collect()
+    }
+
+    /// Compute FixAxisParDist breakpoint values: xi = offset + (i-1) * distance, 1 <= i <= count.
+    pub fn compute_fix_axis_par_dist_values(offset: f64, distance: f64, count: u16) -> Vec<f64> {
+        (1..=count)
+            .map(|i| offset + (i as f64 - 1.0) * distance)
             .collect()
     }
 
@@ -630,19 +653,54 @@ mod tests {
 
     #[test]
     fn fix_axis_par_values_basic() {
+        // offset=0, shift=10 → 2^10=1024 → [0, 1024, 2048, 3072, 4096]
         let vals = Resolver::compute_fix_axis_par_values(0.0, 10.0, 5);
-        assert_eq!(vals, vec![0.0, 10.0, 20.0, 30.0, 40.0]);
+        assert_eq!(vals, vec![0.0, 1024.0, 2048.0, 3072.0, 4096.0]);
     }
 
     #[test]
     fn fix_axis_par_values_with_offset() {
-        let vals = Resolver::compute_fix_axis_par_values(100.0, 0.5, 3);
-        assert_eq!(vals, vec![100.0, 100.5, 101.0]);
+        // offset=100, shift=0 → 2^0=1 → [100, 101, 102]
+        let vals = Resolver::compute_fix_axis_par_values(100.0, 0.0, 3);
+        assert_eq!(vals, vec![100.0, 101.0, 102.0]);
     }
 
     #[test]
     fn fix_axis_par_values_zero_count() {
         let vals = Resolver::compute_fix_axis_par_values(0.0, 1.0, 0);
+        assert!(vals.is_empty());
+    }
+
+    #[test]
+    fn fix_axis_par_values_negative_shift() {
+        // offset=0, shift=-1 → 2^-1=0.5 → [0, 0.5, 1.0, 1.5]
+        let vals = Resolver::compute_fix_axis_par_values(0.0, -1.0, 4);
+        assert_eq!(vals, vec![0.0, 0.5, 1.0, 1.5]);
+    }
+
+    #[test]
+    fn fix_axis_par_values_known_example() {
+        // offset=10, shift=3 → 2^3=8 → [10, 18, 26, 34]
+        let vals = Resolver::compute_fix_axis_par_values(10.0, 3.0, 4);
+        assert_eq!(vals, vec![10.0, 18.0, 26.0, 34.0]);
+    }
+
+    #[test]
+    fn fix_axis_par_dist_values_basic() {
+        // offset=10, distance=5, count=4 → [10, 15, 20, 25]
+        let vals = Resolver::compute_fix_axis_par_dist_values(10.0, 5.0, 4);
+        assert_eq!(vals, vec![10.0, 15.0, 20.0, 25.0]);
+    }
+
+    #[test]
+    fn fix_axis_par_dist_values_single() {
+        let vals = Resolver::compute_fix_axis_par_dist_values(100.0, 3.0, 1);
+        assert_eq!(vals, vec![100.0]);
+    }
+
+    #[test]
+    fn fix_axis_par_dist_values_zero_count() {
+        let vals = Resolver::compute_fix_axis_par_dist_values(0.0, 1.0, 0);
         assert!(vals.is_empty());
     }
 

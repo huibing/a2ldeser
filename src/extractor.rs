@@ -517,6 +517,7 @@ impl<'a> Extractor<'a> {
     fn axis_point_count(&self, axis: &ResolvedAxis) -> Result<usize, ExtractError> {
         match &axis.source {
             AxisSource::FixAxisPar { count, .. } => Ok(*count as usize),
+            AxisSource::FixAxisParDist { count, .. } => Ok(*count as usize),
             AxisSource::FixAxisParList { values } => Ok(values.len()),
             AxisSource::ComAxis {
                 max_axis_points, ..
@@ -537,6 +538,9 @@ impl<'a> Extractor<'a> {
             AxisSource::FixAxisPar {
                 offset, shift, count: n,
             } => Ok(Resolver::compute_fix_axis_par_values(*offset, *shift, *n)),
+            AxisSource::FixAxisParDist {
+                offset, distance, count: n,
+            } => Ok(Resolver::compute_fix_axis_par_dist_values(*offset, *distance, *n)),
             AxisSource::FixAxisParList { values } => Ok(values.clone()),
             AxisSource::ComAxis {
                 axis_pts_address,
